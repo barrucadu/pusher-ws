@@ -12,6 +12,8 @@ module Network.Pusher.WebSockets
   -- * Channels
   , subscribe
   , unsubscribe
+  , members
+  , whoami
 
   -- * Events
   , bind
@@ -23,20 +25,24 @@ module Network.Pusher.WebSockets
   , fork
   ) where
 
+import Control.Arrow (second)
 import Control.Concurrent (ThreadId, forkIO, killThread, myThreadId)
 import Control.DeepSeq (NFData(..), force)
-import Control.Exception (bracket_, finally)
+import Control.Exception (SomeException, bracket_, catch, finally)
+import Control.Lens ((^.), (&), (.~))
 import Control.Monad (forever, when)
 import Control.Monad.IO.Class (MonadIO(..))
 import Data.Aeson (Value(..), decode', decodeStrict', encode)
 import Data.ByteString.Lazy (ByteString)
-import qualified Data.HashMap.Strict as H (empty, lookup, fromList)
+import qualified Data.HashMap.Strict as H
 import Data.IORef (IORef, newIORef, readIORef, atomicModifyIORef')
-import Data.Maybe (isNothing)
-import Data.Text (Text)
+import Data.Maybe (fromMaybe, isNothing)
+import Data.Scientific (toBoundedInteger)
+import Data.Text (Text, isPrefixOf)
 import Data.Text.Encoding (encodeUtf8)
 import Data.Version (Version(..), showVersion)
 import qualified Network.WebSockets as WS
+import qualified Network.Wreq as W
 import qualified Wuss as WS (runSecureClient)
 import Paths_pusher_ws (version)
 
@@ -56,10 +62,19 @@ instance NFData Handler where
 data ClientState = S
   { connection :: WS.Connection
   -- ^ Network connection
+  , options :: Options
+  -- ^ Connection options
+  , activityTimeout :: IORef (Maybe Int)
+  -- ^ Inactivity timeout before a ping should be sent. Set by Pusher
+  -- on connect.
+  , socketId :: IORef (Maybe Text)
+  -- ^ Identifier of the socket. Set by Pusher on connect.
   , threadStore :: IORef [ThreadId]
   -- ^ Currently live threads.
   , eventHandlers :: IORef [Handler]
   -- ^ Event handlers.
+  , presenceChannels :: IORef (H.HashMap Text (Value, H.HashMap Text Value))
+  -- ^ Connected presence channels
   }
 
 -- | A value of type @PusherClient a@ is a computation with access to
@@ -139,21 +154,78 @@ pusherWithKey key options
                      , versionTags = []
                      }
 
-    -- Set-up and tear-down for client threads
+    -- Set-up and tear-down
     run client conn = do
+      timeout  <- newIORef Nothing
+      sid      <- newIORef Nothing
       tids     <- newIORef []
       handlers <- newIORef []
-      let state = S conn tids handlers
+      chans    <- newIORef H.empty
+      let state = S conn options timeout sid tids handlers chans
 
       let killLive = readIORef tids >>= mapM_ killThread
       finally (runClient (wrap client) state) killLive
 
     -- Register default event handlers and fork off handling thread.
     wrap client = do
-      let pingHandler _ _ = triggerEvent "pusher:pong" (Object H.empty)
-      bindJSON (Just "pusher:ping") Nothing pingHandler
+      mapM_ (\(e, h) -> bindJSON (Just e) Nothing h) defaultHandlers
       fork . forever $ awaitEvent >>= handleEvent
       client
+
+-- | Default event handlers
+defaultHandlers :: [(Text, Value -> Maybe Value -> PusherClient ())]
+defaultHandlers =
+  [ ("pusher:ping", pingHandler)
+  , ("pusher:connection_established", establishConnection)
+  , ("pusher_internal:subscription_succeeded", addPresenceChannel)
+  , ("pusher_internal:member_added", addPresenceMember)
+  , ("pusher_internal:member_removed", rmPresenceMember)
+  ]
+
+  where
+    -- Immediately send a pusher:pong
+    pingHandler _ _ = triggerEvent "pusher:pong" $ Object H.empty
+
+    -- Record the activity timeout and socket ID.
+    establishConnection _ (Just (Object data_)) = liftMaybe $ do
+      Number timeout  <- H.lookup "activity_timeout" data_
+      String socketid <- H.lookup "socket_id"        data_
+
+      pure $ do
+        state <- ask
+        strictModifyIORef (activityTimeout state) (const $ toBoundedInteger timeout)
+        strictModifyIORef (socketId state) (const $ Just socketid)
+    establishConnection _ _ = pure ()
+
+    -- Save the list of users
+    addPresenceChannel (Object event) (Just (Object data_)) = liftMaybe $ do
+      String channel <- H.lookup "channel" event
+      Object users   <- H.lookup "hash"    data_
+
+      pure . umap channel $ const users
+    addPresenceChannel _ _ = pure ()
+
+    -- Add a user to the list
+    addPresenceMember (Object event) (Just (Object data_)) = liftMaybe $ do
+      String channel <- H.lookup "channel"   event
+      String uid     <- H.lookup "user_id"   data_
+      info           <- H.lookup "user_info" data_
+
+      pure . umap channel $ H.insert uid info
+    addPresenceMember _ _ = pure ()
+
+    -- Remove a user from the list
+    rmPresenceMember (Object event) (Just (Object data_)) = liftMaybe $ do
+      String channel <- H.lookup "channel" event
+      String uid     <- H.lookup "user_id" data_
+
+      pure . umap channel $ H.delete uid
+    rmPresenceMember _ _ = pure ()
+
+    --  Apply a function to the users list of a presence channel
+    umap channel f = do
+      state <- ask
+      strictModifyIORef (presenceChannels state) $ H.adjust (second f) channel
 
 -- | Block and wait for an event.
 awaitEvent :: PusherClient (Either ByteString Value)
@@ -173,7 +245,7 @@ handleEvent (Right v@(Object o)) = do
 
   let event   = (\(String s) -> s) <$> H.lookup "event"   o
   let channel = (\(String s) -> s) <$> H.lookup "channel" o
-  let data_   = (\(String s) -> s) <$> H.lookup "data"    o
+  let data_   = (\d -> case d of String s -> s; _ -> "") <$> H.lookup "data" o
 
   let match (Handler e c _ _) = (isNothing e || e == event) &&
                                 (isNothing c || c == channel)
@@ -187,17 +259,73 @@ handleEvent (Left _) = pure ()
 
 -------------------------------------------------------------------------------
 
--- | Subscribe to a public channel.
-subscribe :: Text -> PusherClient ()
-subscribe channel = triggerEvent "pusher:subscribe" data_ where
-  data_ = Object $ H.fromList [("channel", String channel)]
+-- | Subscribe to a channel. If the channel name begins with
+-- \"private-\" or \"presence-\", authorisation is performed
+-- automatically.
+--
+-- If authorisation fails, this returns @False@. Otherwise @True@ is
+-- returned.
+subscribe :: Text -> PusherClient Bool
+subscribe channel = do
+  data_ <- getSubscribeData
+  case data_ of
+    Just authdata -> triggerEvent "pusher:subscribe" authdata >> pure True
+    Nothing -> pure False
 
--- TODO: private and presence channel subscription.
+  where
+    getSubscribeData
+      | "private-"  `isPrefixOf` channel = authorise channel
+      | "presence-" `isPrefixOf` channel = authorise channel
+      | otherwise = pure . Just . Object $ H.fromList [("channel", String channel)]
+
+-- | Send a channel authorisation request
+authorise :: Text -> PusherClient (Maybe Value)
+authorise channel = do
+  state <- ask
+  let authURL = authorisationURL $ options state
+  sockID <- liftIO . readIORef $ socketId state
+
+  case (authURL, sockID) of
+    (Just authURL', Just sockID') -> liftIO $ authorise' authURL' sockID'
+    _ -> pure Nothing
+
+  where
+    authorise' authURL sockID = flip catchAll (const $ pure Nothing) $ do
+      let params = W.defaults & W.param "channel_name" .~ [channel]
+                              & W.param "socket_id"    .~ [sockID]
+      r <- W.asValue =<< W.getWith params authURL
+      pure . Just $ r ^. W.responseBody
 
 -- | Unsubscribe from a channel.
 unsubscribe :: Text -> PusherClient ()
-unsubscribe channel = triggerEvent "pusher:unsubscribe" data_ where
-  data_ = Object $ H.fromList [("channel", String channel)]
+unsubscribe channel = do
+  -- Send the unsubscribe message
+  let data_ = Object $ H.fromList [("channel", String channel)]
+  triggerEvent "pusher:unsubscribe" data_
+
+  -- Remove the presence channel
+  state <- ask
+  strictModifyIORef (presenceChannels state) $ H.delete channel
+
+-- | Return the list of all members in a presence channel.
+--
+-- If we are not subscribed to this channel, returns @Nothing@
+members :: Text -> PusherClient (Maybe (H.HashMap Text Value))
+members channel = do
+  state <- ask
+
+  channels <- liftIO . readIORef $ presenceChannels state
+  pure $ snd <$> H.lookup channel channels
+  
+-- | Return information about the local user in a presence channel.
+--
+-- If we are not subscribed to this channel, returns @Nothing@.
+whoami :: Text -> PusherClient (Maybe Value)
+whoami channel = do
+  state <- ask
+
+  channels <- liftIO . readIORef $ presenceChannels state
+  pure $ fst <$> H.lookup channel channels
 
 -------------------------------------------------------------------------------
 
@@ -271,6 +399,15 @@ fork (P action) = P $ \s -> forkIO (run s) where
 ask :: PusherClient ClientState
 ask = P pure
 
--- | Modify an IORef strictly
-strictModifyIORef :: NFData a => IORef a -> (a -> a) -> IO ()
-strictModifyIORef ioref f = atomicModifyIORef' ioref (\a -> (force $ f a, ()))
+-- | Turn a @Maybe@ action into a @PusherClient@ action.
+liftMaybe :: Maybe (PusherClient ()) -> PusherClient ()
+liftMaybe = fromMaybe $ pure ()
+
+-- | Modify an @IORef@ strictly
+strictModifyIORef :: (MonadIO m, NFData a) => IORef a -> (a -> a) -> m ()
+strictModifyIORef ioref f =
+  liftIO $ atomicModifyIORef' ioref (\a -> (force $ f a, ()))
+
+-- | Catch all exceptions
+catchAll :: IO a -> (SomeException -> IO a) -> IO a
+catchAll = catch

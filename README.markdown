@@ -8,8 +8,9 @@ This is very incomplete! Current features:
 
 - ws:// and wss:// protocols.
 - Clusters.
-- Subscribing to public channels.
+- Subscribing to channels.
 - Unsubscribing from channels.
+- Authorisation for private and presence channels.
 - Binding event handlers.
 - Sending events.
 - Threads which automatically get cleaned up on connection close.
