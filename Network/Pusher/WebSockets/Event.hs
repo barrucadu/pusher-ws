@@ -5,15 +5,20 @@ module Network.Pusher.WebSockets.Event
   , eventChannel
 
   -- * Event Handlers
+  , Binding
   , bind
   , bindJSON
   , bindWith
+  , unbind
+
+  -- * Client Events
   , triggerEvent
   ) where
 
 import Control.Monad.IO.Class (liftIO)
 import Data.Aeson (Value(..), decodeStrict', encode)
 import qualified Data.HashMap.Strict as H
+import Data.IORef (readIORef)
 import Data.Text (Text)
 import Data.Text.Encoding (encodeUtf8)
 import qualified Network.WebSockets as WS
@@ -56,7 +61,7 @@ bind :: Maybe Text
      -- handled.
      -> (Value -> PusherClient ())
      -- ^ Event handler.
-     -> PusherClient ()
+     -> PusherClient Binding
 bind event channel handler = bindWith (const Nothing) event channel $
   \ev _ -> handler ev
 
@@ -69,7 +74,7 @@ bindJSON :: Maybe Text
          -> (Value -> Maybe Value -> PusherClient ())
          -- ^ Event handler. Second parameter is the possibly-decoded
          -- \"data\" field.
-         -> PusherClient ()
+         -> PusherClient Binding
 bindJSON = bindWith $ decodeStrict' . encodeUtf8
 
 -- | Variant of 'bind' which attempts to decode the \"data\" field of
@@ -82,10 +87,20 @@ bindWith :: (Text -> Maybe a)
          -- ^ Channel name.
          -> (Value -> Maybe a -> PusherClient ())
          -- ^ Event handler.
-         -> PusherClient ()
-bindWith decoder event channel handler = P $ \s ->
+         -> PusherClient Binding
+bindWith decoder event channel handler = do
+  state <- ask
+  b@(Binding i) <- liftIO $ readIORef (nextBinding state)
+  liftIO $ strictModifyIORef (nextBinding state) (const . Binding $ i+1)
   let h = Handler event channel decoder handler
-  in strictModifyIORef (eventHandlers s) (h:)
+  strictModifyIORef (eventHandlers state) (H.insert b h)
+  pure b
+
+-- | Remove a binding
+unbind :: Binding -> PusherClient ()
+unbind binding = do
+  state <- ask
+  strictModifyIORef (eventHandlers state) (H.delete binding)
 
 -------------------------------------------------------------------------------
 

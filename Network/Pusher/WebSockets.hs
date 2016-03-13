@@ -20,9 +20,13 @@ module Network.Pusher.WebSockets
   , eventChannel
 
   -- * Event Handlers
+  , Binding
   , bind
   , bindJSON
   , bindWith
+  , unbind
+
+  -- * Client Events
   , triggerEvent
 
   -- * Utilities
@@ -38,7 +42,7 @@ import Data.Aeson (Value(..), decode', decodeStrict')
 import Data.ByteString.Lazy (ByteString)
 import Data.Functor (void)
 import qualified Data.HashMap.Strict as H
-import Data.IORef (newIORef, readIORef)
+import Data.IORef (readIORef)
 import Data.Maybe (isNothing)
 import Data.Scientific (toBoundedInteger)
 import Data.Text (Text)
@@ -51,16 +55,6 @@ import Paths_pusher_ws (version)
 import Network.Pusher.WebSockets.Channel
 import Network.Pusher.WebSockets.Event
 import Network.Pusher.WebSockets.Internal
-
--------------------------------------------------------------------------------
-
--- | See 'Options' field documentation for what is set here.
-defaultOptions :: Options
-defaultOptions = Options
-  { encrypted = True
-  , authorisationURL = Nothing
-  , cluster = "us-east-1"
-  }
 
 -------------------------------------------------------------------------------
 
@@ -92,14 +86,9 @@ pusherWithKey key opts
 
     -- Set-up and tear-down
     run client conn = do
-      timeout  <- newIORef Nothing
-      sid      <- newIORef Nothing
-      tids     <- newIORef []
-      handlers <- newIORef []
-      chans    <- newIORef H.empty
-      let state = S conn opts timeout sid tids handlers chans
+      state <- defaultClientState conn opts
 
-      let killLive = readIORef tids >>= mapM_ killThread
+      let killLive = readIORef (threadStore state) >>= mapM_ killThread
       finally (runClient (wrap client) state) killLive
 
     -- Register default event handlers and fork off handling thread.
@@ -187,7 +176,9 @@ handleEvent (Right event@(Object o)) = do
 
   let match (Handler e c _ _) = (isNothing e || e == Just ty) &&
                                 (isNothing c || c == ch)
-  handlers <- filter match <$> liftIO (readIORef $ eventHandlers state)
+
+  allHandlers <- liftIO . readIORef $ eventHandlers state
+  let handlers = filter match $ H.elems allHandlers
 
   let handle (Handler _ _ d h) = h event $ data_ >>= d
   mapM_ (fork . handle) handlers

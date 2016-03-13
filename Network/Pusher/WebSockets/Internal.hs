@@ -9,7 +9,7 @@ import Control.Monad.IO.Class (MonadIO(..))
 import Data.Aeson (Value(..))
 import Data.Hashable (Hashable(..))
 import qualified Data.HashMap.Strict as H
-import Data.IORef (IORef, atomicModifyIORef')
+import Data.IORef (IORef, newIORef, atomicModifyIORef')
 import Data.Maybe (fromMaybe)
 import Data.Text (Text, unpack)
 import qualified Network.WebSockets as WS
@@ -53,11 +53,34 @@ data ClientState = S
   -- ^ Identifier of the socket. Set by Pusher on connect.
   , threadStore :: IORef [ThreadId]
   -- ^ Currently live threads.
-  , eventHandlers :: IORef [Handler]
+  , eventHandlers :: IORef (H.HashMap Binding Handler)
   -- ^ Event handlers.
+  , nextBinding :: IORef Binding
+  -- ^ Next free binding.
   , presenceChannels :: IORef (H.HashMap Channel (Value, H.HashMap Text Value))
   -- ^ Connected presence channels
   }
+
+-- | State for a brand new connection.
+defaultClientState :: WS.Connection -> Options -> IO ClientState
+defaultClientState conn opts = do
+  defIdleTimer   <- newIORef Nothing
+  defSocketId    <- newIORef Nothing
+  defThreadStore <- newIORef []
+  defEHandlers   <- newIORef H.empty
+  defBinding     <- newIORef $ Binding 0
+  defPChannels    <- newIORef H.empty
+
+  pure S
+    { connection       = conn
+    , options          = opts
+    , idleTimer        = defIdleTimer
+    , socketId         = defSocketId
+    , threadStore      = defThreadStore
+    , eventHandlers    = defEHandlers
+    , nextBinding      = defBinding
+    , presenceChannels = defPChannels
+    }
 
 -------------------------------------------------------------------------------
 
@@ -76,6 +99,14 @@ data Options = Options
   -- hostnames for the connection. This parameter is mandatory when
   -- the app is created in a different cluster to the default
   -- us-east-1. Defaults to @"us-east-1"@.
+  }
+
+-- | See 'Options' field documentation for what is set here.
+defaultOptions :: Options
+defaultOptions = Options
+  { encrypted = True
+  , authorisationURL = Nothing
+  , cluster = "us-east-1"
   }
 
 -------------------------------------------------------------------------------
@@ -110,6 +141,24 @@ instance Show Channel where
 
 instance Hashable Channel where
   hashWithSalt salt (Channel c) = hashWithSalt salt c
+
+-------------------------------------------------------------------------------
+
+-- | Event binding handle: a witness that we bound an event handler, and is
+-- used to unbind it.
+--
+-- If this is used after unbinding, nothing will happen.
+newtype Binding = Binding Int
+  deriving Eq
+
+instance NFData Binding where
+  rnf (Binding b) = rnf b
+
+instance Show Binding where
+  show (Binding b) = "<<binding " ++ show b ++ ">>"
+
+instance Hashable Binding where
+  hashWithSalt salt (Binding b) = hashWithSalt salt b
 
 -------------------------------------------------------------------------------
 
