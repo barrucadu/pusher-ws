@@ -93,24 +93,24 @@ pusherWithKey key options
                      , versionTags = []
                      }
 
--- | Block and wait for a message. If the message could not be
+-- | Block and wait for an event. If the event could not be
 -- decoded, the original @ByteString@ is returned instead, although
 -- this should never happen!
 --
--- This automatically responds to control messages.
-receiveMessage :: PusherClient (Either ByteString Value)
-receiveMessage = receiveMessageDecode (Just . String)
+-- This automatically responds to control events.
+awaitEvent :: PusherClient (Either ByteString Value)
+awaitEvent = awaitEventWith (Just . String)
 
--- | Variant of 'receiveMessage' that attempts to decode the \"data\"
--- field of the message as JSON.
-receiveMessageJSON :: PusherClient (Either ByteString Value)
-receiveMessageJSON = receiveMessageDecode (decodeStrict' . encodeUtf8)
+-- | Variant of 'awaitEvent' that attempts to decode the \"data\"
+-- field of the event as JSON.
+awaitEventJSON :: PusherClient (Either ByteString Value)
+awaitEventJSON = awaitEventWith (decodeStrict' . encodeUtf8)
 
--- | Variant of 'receiveMessageJSON' that takes a function to decode
--- the \"dat\" field of the message. If the field can not be decoded,
--- the @ByteString@ of the entire message is returned instead.
-receiveMessageDecode :: (Text -> Maybe Value) -> PusherClient (Either ByteString Value)
-receiveMessageDecode f = P $ \conn -> do
+-- | Variant of 'awaitEventJSON' that takes a function to decode
+-- the \"data\" field of the event. If the field can not be decoded,
+-- the @ByteString@ of the entire event is returned instead.
+awaitEventWith :: (Text -> Maybe Value) -> PusherClient (Either ByteString Value)
+awaitEventWith f = P $ \conn -> do
   msg <- WS.receiveDataMessage conn
   let decoded = decode msg
 
