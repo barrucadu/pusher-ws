@@ -18,7 +18,10 @@ cabal-version:       >=1.10
 
 library
   exposed-modules:     Network.Pusher.WebSockets
-  other-modules:       Paths_pusher_ws
+                     , Network.Pusher.WebSockets.Channel
+                     , Network.Pusher.WebSockets.Event
+  other-modules:       Network.Pusher.WebSockets.Internal
+                     , Paths_pusher_ws
   -- other-extensions:    
   build-depends:       base >=4.8 && <4.9
                      , aeson
@@ -34,3 +37,4 @@ library
                      , wuss
   -- hs-source-dirs:      
   default-language:    Haskell2010
+  ghc-options:         -Wall
