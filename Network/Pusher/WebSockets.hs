@@ -69,7 +69,7 @@ defaultOptions = Options
 
 -- | Connect to Pusher.
 --
--- Takes the application key and options, and runs a client. Whent he
+-- Takes the application key and options, and runs a client. When the
 -- client terminates, the connection is closed.
 pusherWithKey :: String -> Options -> PusherClient a -> IO a
 pusherWithKey key options
