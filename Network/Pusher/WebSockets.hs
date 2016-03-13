@@ -8,11 +8,15 @@ module Network.Pusher.WebSockets
   , pusherWithKey
   ) where
 
+import Control.Concurrent (ThreadId, forkIO, killThread, myThreadId)
+import Control.DeepSeq (force)
+import Control.Exception (bracket_, finally)
 import Control.Monad (when)
 import Control.Monad.IO.Class (MonadIO(..))
 import Data.Aeson (Value(..), decode', decodeStrict', encode)
 import Data.ByteString.Lazy (ByteString)
 import qualified Data.HashMap.Strict as H (empty, lookup, fromList)
+import Data.IORef (IORef, newIORef, readIORef, atomicModifyIORef')
 import Data.Text (Text)
 import Data.Text.Encoding (encodeUtf8)
 import Data.Version (Version(..), showVersion)
@@ -20,11 +24,19 @@ import qualified Network.WebSockets as WS
 import qualified Wuss as WS (runSecureClient)
 import Paths_pusher_ws (version)
 
+-- | Private state for the client.
+data ClientState = S
+  { connection :: WS.Connection
+  -- ^ Network connection
+  , threadStore :: IORef [ThreadId]
+  -- ^ Currently live threads.
+  }
+
 -- | A value of type @PusherClient a@ is a computation with access to
 -- a connection to Pusher which, when executed, may perform
 -- Pusher-specific actions such as subscribing to channels and
 -- receiving events, as well as arbitrary I/O.
-newtype PusherClient a = P { runClient :: WS.ClientApp a }
+newtype PusherClient a = P { runClient :: ClientState -> IO a }
 
 instance Functor PusherClient where
   fmap f (P a) = P $ fmap f . a
@@ -32,12 +44,12 @@ instance Functor PusherClient where
 instance Applicative PusherClient where
   pure = P . const . pure
 
-  (P f) <*> (P a) = P $ \conn -> f conn <*> a conn
+  (P f) <*> (P a) = P $ \s -> f s <*> a s
 
 instance Monad PusherClient where
-  (P a) >>= f = P $ \conn -> do
-    a' <- a conn
-    runClient (f a') conn
+  (P a) >>= f = P $ \s -> do
+    a' <- a s
+    runClient (f a') s
 
 instance MonadIO PusherClient where
   liftIO = P . const
@@ -73,8 +85,8 @@ defaultOptions = Options
 -- client terminates, the connection is closed.
 pusherWithKey :: String -> Options -> PusherClient a -> IO a
 pusherWithKey key options
-  | encrypted options = WS.runSecureClient host 443 path . runClient
-  | otherwise         = WS.runClient       host  80 path . runClient
+  | encrypted options = WS.runSecureClient host 443 path . run
+  | otherwise         = WS.runClient       host  80 path . run
 
   where
     host
@@ -93,6 +105,31 @@ pusherWithKey key options
                      , versionTags = []
                      }
 
+    -- Set-up and tear-down for client threads
+    run (P client) conn = do
+      tids <- newIORef []
+      let state = S { connection = conn, threadStore = tids }
+      let killLive = readIORef tids >>= mapM_ killThread
+      finally (client state) killLive
+
+-- | Fork a thread which will be killed when the connection is closed.
+fork :: PusherClient () -> PusherClient ThreadId
+fork (P action) = P $ \s -> forkIO (run s) where
+  run s = bracket_ setup teardown (action s) where
+    -- Add the thread ID to the list
+    setup = do
+      tid <- myThreadId
+      modifyStore (tid:)
+
+    -- Remove the thread ID from the list
+    teardown = do
+      tid <- myThreadId
+      modifyStore (filter (/=tid))
+
+    -- Modify the thread store strictly
+    modifyStore f =
+      atomicModifyIORef' (threadStore s) (\tids -> (force $ f tids, ()))
+
 -- | Block and wait for an event. If the event could not be
 -- decoded, the original @ByteString@ is returned instead, although
 -- this should never happen!
@@ -110,12 +147,12 @@ awaitEventJSON = awaitEventWith (decodeStrict' . encodeUtf8)
 -- the \"data\" field of the event. If the field can not be decoded,
 -- the @ByteString@ of the entire event is returned instead.
 awaitEventWith :: (Text -> Maybe Value) -> PusherClient (Either ByteString Value)
-awaitEventWith f = P $ \conn -> do
-  msg <- WS.receiveDataMessage conn
+awaitEventWith f = P $ \s -> do
+  msg <- WS.receiveDataMessage (connection s)
   let decoded = decode msg
 
   when (isPing decoded) $
-    runClient (triggerEvent "pusher:pong" $ Object H.empty) conn
+    runClient (triggerEvent "pusher:pong" $ Object H.empty) s
 
   pure decoded
 
@@ -133,5 +170,5 @@ awaitEventWith f = P $ \conn -> do
 
 -- | Send an event with some JSON data.
 triggerEvent :: Text -> Value -> PusherClient ()
-triggerEvent event data_ = P $ \conn -> WS.sendDataMessage conn (WS.Text msg) where
+triggerEvent event data_ = P $ \s -> WS.sendDataMessage (connection s) (WS.Text msg) where
   msg = encode . Object $ H.fromList [("event", String event), ("data", data_)]
