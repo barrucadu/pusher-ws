@@ -171,10 +171,9 @@ awaitEvent :: PusherClient (Either ByteString Value)
 awaitEvent = P $ \s -> decode <$> WS.receiveDataMessage (connection s) where
   decode (WS.Text bs) = maybe (Left bs) Right $ do
     Object o <- decode' bs
-    event <- H.lookup "event" o
     String d <- H.lookup "data" o
-    data_ <- decodeStrict' $ encodeUtf8 d
-    pure . Object $ H.fromList [("event", event), ("data", data_)]
+    data_    <- decodeStrict' $ encodeUtf8 d
+    pure . Object $ H.adjust (const data_) "data" o
   decode (WS.Binary bs) = Left bs
 
 -- | Launch all event handlers which are bound to the current event.
