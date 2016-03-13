@@ -12,7 +12,7 @@ import Control.Monad (when)
 import Control.Monad.IO.Class (MonadIO(..))
 import Data.Aeson (Value(..), decode', decodeStrict', encode)
 import Data.ByteString.Lazy (ByteString)
-import qualified Data.HashMap.Strict as H (lookup, fromList)
+import qualified Data.HashMap.Strict as H (empty, lookup, fromList)
 import Data.Text (Text)
 import Data.Text.Encoding (encodeUtf8)
 import Data.Version (Version(..), showVersion)
@@ -115,7 +115,7 @@ awaitEventWith f = P $ \conn -> do
   let decoded = decode msg
 
   when (isPing decoded) $
-    runClient (triggerEvent "pusher:pong" $ Object (H.fromList [])) conn
+    runClient (triggerEvent "pusher:pong" $ Object H.empty) conn
 
   pure decoded
 
@@ -128,7 +128,7 @@ awaitEventWith f = P $ \conn -> do
       pure . Object $ H.fromList [("event", event), ("data", data_)]
     decode (WS.Binary bs) = Left bs
 
-    isPing (Right (Object v)) = H.lookup "event" v == Just (String "pusher:ping")
+    isPing (Right (Object v)) = H.lookup "event" v == Just "pusher:ping"
     isPing _ = False
 
 -- | Send an event with some JSON data.
