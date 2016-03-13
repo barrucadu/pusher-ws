@@ -1,7 +1,11 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 module Network.Pusher.WebSockets.Event
-  ( bind
+  ( eventType
+  , eventChannel
+
+  -- * Event Handlers
+  , bind
   , bindJSON
   , bindWith
   , triggerEvent
@@ -18,6 +22,28 @@ import Network.Pusher.WebSockets.Internal
 
 -------------------------------------------------------------------------------
 
+-- | Get the value of the \"event\" field.
+--
+-- If not present (which should never happen!), returns the empty
+-- string.
+eventType :: Value -> Text
+eventType (Object o) = maybe "" unJSON $ H.lookup "event" o where
+  unJSON (String s) = s
+  unJSON _ = ""
+eventType _ = ""
+
+-- | Get the value of the \"channel\" field.
+--
+-- This will be @Nothing@ if the event was broadcast to all clients,
+-- with no channel restriction.
+eventChannel :: Value -> Maybe Channel
+eventChannel (Object o) = H.lookup "channel" o >>= unJSON where
+  unJSON (String s) = Just $ Channel s
+  unJSON _ = Nothing
+eventChannel _ = Nothing
+
+-------------------------------------------------------------------------------
+
 -- | Bind an event handler to an event type, optionally restricted to a
 -- channel. If no event name is given, bind to all events.
 --
@@ -25,7 +51,7 @@ import Network.Pusher.WebSockets.Internal
 -- executed. The order is unspecified, and may not be consistent.
 bind :: Maybe Text
      -- ^ Event name.
-     -> Maybe Text
+     -> Maybe Channel
      -- ^ Channel name: If @Nothing@, all events of that name are
      -- handled.
      -> (Value -> PusherClient ())
@@ -38,7 +64,7 @@ bind event channel handler = bindWith (const Nothing) event channel $
 -- as JSON.
 bindJSON :: Maybe Text
          -- ^ Event name.
-         -> Maybe Text
+         -> Maybe Channel
          -- ^ Channel name.
          -> (Value -> Maybe Value -> PusherClient ())
          -- ^ Event handler. Second parameter is the possibly-decoded
@@ -52,7 +78,7 @@ bindWith :: (Text -> Maybe a)
          -- ^ Decoder.
          -> Maybe Text
          -- ^ Event name.
-         -> Maybe Text
+         -> Maybe Channel
          -- ^ Channel name.
          -> (Value -> Maybe a -> PusherClient ())
          -- ^ Event handler.
@@ -64,11 +90,15 @@ bindWith decoder event channel handler = P $ \s ->
 -------------------------------------------------------------------------------
 
 -- | Send an event with some JSON data.
-triggerEvent :: Text -> Value -> PusherClient ()
-triggerEvent event data_ = sendJSON msg where
-  msg = Object $ H.fromList [("event", String event), ("data", data_)]
+triggerEvent :: Text -> Maybe Channel -> Value -> PusherClient ()
+triggerEvent event channel data_ = sendJSON msg where
+  msg = Object . H.fromList $ concat
+    [ [("event",   String event)]
+    , [("channel", String chan) | Just (Channel chan) <- [channel]]
+    , [("data",    data_)]
+    ]
 
--- | Send some JSON down the channel.
+-- | Send some JSON down the socket.
 sendJSON :: Value -> PusherClient ()
 sendJSON data_ = do
   state <- ask

@@ -7,10 +7,11 @@ import Control.DeepSeq (NFData(..), force)
 import Control.Exception (SomeException, catch)
 import Control.Monad.IO.Class (MonadIO(..))
 import Data.Aeson (Value(..))
+import Data.Hashable (Hashable(..))
 import qualified Data.HashMap.Strict as H
 import Data.IORef (IORef, atomicModifyIORef')
 import Data.Maybe (fromMaybe)
-import Data.Text (Text)
+import Data.Text (Text, unpack)
 import qualified Network.WebSockets as WS
 
 -------------------------------------------------------------------------------
@@ -54,7 +55,7 @@ data ClientState = S
   -- ^ Currently live threads.
   , eventHandlers :: IORef [Handler]
   -- ^ Event handlers.
-  , presenceChannels :: IORef (H.HashMap Text (Value, H.HashMap Text Value))
+  , presenceChannels :: IORef (H.HashMap Channel (Value, H.HashMap Text Value))
   -- ^ Connected presence channels
   }
 
@@ -82,7 +83,7 @@ data Options = Options
 -- | Event handlers: event name -> channel name -> decoder -> handler.
 data Handler where
   Handler :: Maybe Text
-          -> Maybe Text
+          -> Maybe Channel
           -> (Text -> Maybe a)
           -> (Value -> Maybe a -> PusherClient ())
           -> Handler
@@ -90,6 +91,25 @@ data Handler where
 -- Cheats a bit.
 instance NFData Handler where
   rnf (Handler e c _ _) = rnf (e, c)
+
+-------------------------------------------------------------------------------
+
+-- | Channel handle: a witness that we joined a channel, and is used
+-- to subscribe to events.
+--
+-- If this is used when unsubscribed from a channel, nothing will
+-- happen.
+newtype Channel = Channel Text
+  deriving Eq
+
+instance NFData Channel where
+  rnf (Channel c) = rnf c
+
+instance Show Channel where
+  show (Channel c) = unpack c
+
+instance Hashable Channel where
+  hashWithSalt salt (Channel c) = hashWithSalt salt c
 
 -------------------------------------------------------------------------------
 

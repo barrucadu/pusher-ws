@@ -9,12 +9,17 @@ module Network.Pusher.WebSockets
   , pusherWithKey
 
   -- * Channels
+  , Channel
   , subscribe
   , unsubscribe
   , members
   , whoami
 
   -- * Events
+  , eventType
+  , eventChannel
+
+  -- * Event Handlers
   , bind
   , bindJSON
   , bindWith
@@ -115,7 +120,7 @@ defaultHandlers =
 
   where
     -- Immediately send a pusher:pong
-    pingHandler _ _ = triggerEvent "pusher:pong" $ Object H.empty
+    pingHandler _ _ = triggerEvent "pusher:pong" Nothing $ Object H.empty
 
     -- Record the activity timeout and socket ID.
     establishConnection _ (Just (Object data_)) = liftMaybe $ do
@@ -129,26 +134,29 @@ defaultHandlers =
     establishConnection _ _ = pure ()
 
     -- Save the list of users
-    addPresenceChannel (Object event) (Just (Object data_)) = liftMaybe $ do
-      String channel <- H.lookup "channel" event
-      Object users   <- H.lookup "hash"    data_
+    addPresenceChannel event (Just (Object data_)) = liftMaybe $ do
+      channel <- eventChannel event
+
+      Object users <- H.lookup "hash" data_
 
       pure . umap channel $ const users
     addPresenceChannel _ _ = pure ()
 
     -- Add a user to the list
-    addPresenceMember (Object event) (Just (Object data_)) = liftMaybe $ do
-      String channel <- H.lookup "channel"   event
-      String uid     <- H.lookup "user_id"   data_
-      info           <- H.lookup "user_info" data_
+    addPresenceMember event (Just (Object data_)) = liftMaybe $ do
+      channel <- eventChannel event
+
+      String uid <- H.lookup "user_id"   data_
+      info       <- H.lookup "user_info" data_
 
       pure . umap channel $ H.insert uid info
     addPresenceMember _ _ = pure ()
 
     -- Remove a user from the list
-    rmPresenceMember (Object event) (Just (Object data_)) = liftMaybe $ do
-      String channel <- H.lookup "channel" event
-      String uid     <- H.lookup "user_id" data_
+    rmPresenceMember event (Just (Object data_)) = liftMaybe $ do
+      channel <- eventChannel event
+
+      String uid <- H.lookup "user_id" data_
 
       pure . umap channel $ H.delete uid
     rmPresenceMember _ _ = pure ()
@@ -171,18 +179,18 @@ awaitEvent = P $ \s -> decode <$> WS.receiveDataMessage (connection s) where
 
 -- | Launch all event handlers which are bound to the current event.
 handleEvent :: Either ByteString Value -> PusherClient ()
-handleEvent (Right v@(Object o)) = do
+handleEvent (Right event@(Object o)) = do
   state <- ask
 
-  let event   = (\(String s) -> s) <$> H.lookup "event"   o
-  let channel = (\(String s) -> s) <$> H.lookup "channel" o
-  let data_   = (\d -> case d of String s -> s; _ -> "") <$> H.lookup "data" o
+  let ty = eventType event
+  let ch = eventChannel event
+  let data_ = (\d -> case d of String s -> s; _ -> "") <$> H.lookup "data" o
 
-  let match (Handler e c _ _) = (isNothing e || e == event) &&
-                                (isNothing c || c == channel)
+  let match (Handler e c _ _) = (isNothing e || e == Just ty) &&
+                                (isNothing c || c == ch)
   handlers <- filter match <$> liftIO (readIORef $ eventHandlers state)
 
-  let handle (Handler _ _ d h) = h v $ data_ >>= d
+  let handle (Handler _ _ d h) = h event $ data_ >>= d
   mapM_ (fork . handle) handlers
 -- Discard events which couldn't be decoded.
 handleEvent _ = pure ()

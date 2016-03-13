@@ -1,7 +1,8 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 module Network.Pusher.WebSockets.Channel
-  ( subscribe
+  ( Channel
+  , subscribe
   , unsubscribe
   , members
   , whoami
@@ -12,6 +13,7 @@ import Control.Monad.IO.Class (MonadIO(..))
 import Data.Aeson (Value(..))
 import qualified Data.HashMap.Strict as H
 import Data.IORef (readIORef)
+import Data.Maybe (fromMaybe)
 import Data.Text (Text, isPrefixOf)
 import qualified Network.Wreq as W
 
@@ -24,29 +26,31 @@ import Network.Pusher.WebSockets.Internal
 -- \"private-\" or \"presence-\", authorisation is performed
 -- automatically.
 --
--- If authorisation fails, this returns @False@. Otherwise @True@ is
--- returned.
-subscribe :: Text -> PusherClient Bool
+-- If authorisation fails, this returns @Nothing@.
+subscribe :: Text -> PusherClient (Maybe Channel)
 subscribe channel = do
   data_ <- getSubscribeData
   case data_ of
-    Just authdata -> triggerEvent "pusher:subscribe" authdata >> pure True
-    Nothing -> pure False
+    Just authdata -> do
+      triggerEvent "pusher:subscribe" Nothing authdata
+      pure $ Just handle
+    Nothing -> pure Nothing
 
   where
     getSubscribeData
-      | "private-"  `isPrefixOf` channel = authorise channel
-      | "presence-" `isPrefixOf` channel = authorise channel
+      | "private-"  `isPrefixOf` channel = authorise handle
+      | "presence-" `isPrefixOf` channel = authorise handle
       | otherwise = pure $ Just channelData
+
+    handle = Channel channel
 
     channelData = Object $ H.fromList [("channel", String channel)]
 
 -- | Unsubscribe from a channel.
-unsubscribe :: Text -> PusherClient ()
+unsubscribe :: Channel -> PusherClient ()
 unsubscribe channel = do
   -- Send the unsubscribe message
-  let data_ = Object $ H.fromList [("channel", String channel)]
-  triggerEvent "pusher:unsubscribe" data_
+  triggerEvent "pusher:unsubscribe" (Just channel) Null
 
   -- Remove the presence channel
   state <- ask
@@ -54,29 +58,31 @@ unsubscribe channel = do
 
 -- | Return the list of all members in a presence channel.
 --
--- If we are not subscribed to this channel, returns @Nothing@
-members :: Text -> PusherClient (Maybe (H.HashMap Text Value))
+-- If we have unsubscribed from this channel, or it is not a presence
+-- channel, returns an empty map.
+members :: Channel -> PusherClient (H.HashMap Text Value)
 members channel = do
   state <- ask
 
   channels <- liftIO . readIORef $ presenceChannels state
-  pure $ snd <$> H.lookup channel channels
+  pure . fromMaybe H.empty $ snd <$> H.lookup channel channels
   
 -- | Return information about the local user in a presence channel.
 --
--- If we are not subscribed to this channel, returns @Nothing@.
-whoami :: Text -> PusherClient (Maybe Value)
+-- If we have unsubscribed from this channel, or it is not a presence
+-- channel, returns @Null@.
+whoami :: Channel -> PusherClient Value
 whoami channel = do
   state <- ask
 
   channels <- liftIO . readIORef $ presenceChannels state
-  pure $ fst <$> H.lookup channel channels
+  pure . fromMaybe Null $ fst <$> H.lookup channel channels
 
 -------------------------------------------------------------------------------
 
 -- | Send a channel authorisation request
-authorise :: Text -> PusherClient (Maybe Value)
-authorise channel = do
+authorise :: Channel -> PusherClient (Maybe Value)
+authorise (Channel channel) = do
   state <- ask
   let authURL = authorisationURL $ options state
   sockID <- liftIO . readIORef $ socketId state
