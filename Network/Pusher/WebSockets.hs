@@ -30,7 +30,7 @@ instance Functor PusherClient where
   fmap f (P a) = P $ fmap f . a
 
 instance Applicative PusherClient where
-  pure = liftIO . pure
+  pure = P . const . pure
 
   (P f) <*> (P a) = P $ \conn -> f conn <*> a conn
 
