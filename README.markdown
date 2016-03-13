@@ -41,7 +41,7 @@ pusherWithKey key defaultOptions $ do
 
   -- Bind an event handler for all events on all channels which prints
   -- the received JSON.
-  bind Nothing Nothing (liftIO . print)
+  bindAll Nothing (liftIO . print)
 
   -- Loop forever, as the connection is closed when this action
   -- terminates.

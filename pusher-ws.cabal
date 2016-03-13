@@ -29,6 +29,7 @@ library
                      , deepseq
                      , hashable
                      , lens
+                     , lens-aeson
                      , scientific
                      , stm
                      , text

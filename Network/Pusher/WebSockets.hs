@@ -22,8 +22,7 @@ module Network.Pusher.WebSockets
   -- * Event Handlers
   , Binding
   , bind
-  , bindJSON
-  , bindWith
+  , bindAll
   , unbind
 
   -- * Client Events
@@ -36,13 +35,14 @@ module Network.Pusher.WebSockets
 import Control.Arrow (second)
 import Control.Concurrent (ThreadId, forkIO, killThread, myThreadId)
 import Control.Exception (bracket_, finally)
+import Control.Lens ((^?), ix)
 import Control.Monad (forever)
 import Data.Aeson (Value(..), decode', decodeStrict')
+import Data.Aeson.Lens (_Integral, _Object, _String, _Value)
 import Data.ByteString.Lazy (ByteString)
 import Data.Functor (void)
 import qualified Data.HashMap.Strict as H
 import Data.Maybe (isNothing)
-import Data.Scientific (toBoundedInteger)
 import Data.Text (Text)
 import Data.Text.Encoding (encodeUtf8)
 import Data.Version (Version(..), showVersion)
@@ -91,12 +91,12 @@ pusherWithKey key opts
 
     -- Register default event handlers and fork off handling thread.
     wrap client = do
-      mapM_ (\(e, h) -> bindJSON (Just e) Nothing h) defaultHandlers
+      mapM_ (\(e, h) -> bind e Nothing h) defaultHandlers
       void . fork . forever $ awaitEvent >>= handleEvent
       client
 
 -- | Default event handlers
-defaultHandlers :: [(Text, Value -> Maybe Value -> PusherClient ())]
+defaultHandlers :: [(Text, Value -> PusherClient ())]
 defaultHandlers =
   [ ("pusher:ping", pingHandler)
   , ("pusher:connection_established", establishConnection)
@@ -107,46 +107,43 @@ defaultHandlers =
 
   where
     -- Immediately send a pusher:pong
-    pingHandler _ _ = triggerEvent "pusher:pong" Nothing $ Object H.empty
+    pingHandler _ = triggerEvent "pusher:pong" Nothing $ Object H.empty
 
     -- Record the activity timeout and socket ID.
-    establishConnection _ (Just (Object data_)) = liftMaybe $ do
-      Number timeout  <- H.lookup "activity_timeout" data_
-      String socketid <- H.lookup "socket_id"        data_
+    --
+    -- Not sure why this one needs a type signature but the others
+    -- don't.
+    establishConnection :: Value -> PusherClient ()
+    establishConnection event = liftMaybe $ do
+      socketid <- event ^? ix "data" . ix "socket_id"        . _String
+      timeout  <- event ^? ix "data" . ix "activity_timeout" . _Integral
 
       pure $ do
         state <- ask
-        strictModifyTVarIO (idleTimer state) (const $ toBoundedInteger timeout)
-        strictModifyTVarIO (socketId state) (const $ Just socketid)
-    establishConnection _ _ = pure ()
+        strictModifyTVarIO (idleTimer state) (const $ Just timeout)
+        strictModifyTVarIO (socketId  state) (const $ Just socketid)
 
     -- Save the list of users
-    addPresenceChannel event (Just (Object data_)) = liftMaybe $ do
+    addPresenceChannel event = liftMaybe $ do
       channel <- eventChannel event
-
-      Object users <- H.lookup "hash" data_
+      users   <- event ^? ix "data" . ix "hash" . _Object
 
       pure . umap channel $ const users
-    addPresenceChannel _ _ = pure ()
 
     -- Add a user to the list
-    addPresenceMember event (Just (Object data_)) = liftMaybe $ do
+    addPresenceMember event = liftMaybe $ do
       channel <- eventChannel event
-
-      String uid <- H.lookup "user_id"   data_
-      info       <- H.lookup "user_info" data_
+      uid     <- event ^? ix "data" . ix "user_id"   . _String
+      info    <- event ^? ix "data" . ix "user_info" . _Value
 
       pure . umap channel $ H.insert uid info
-    addPresenceMember _ _ = pure ()
 
     -- Remove a user from the list
-    rmPresenceMember event (Just (Object data_)) = liftMaybe $ do
+    rmPresenceMember event = liftMaybe $ do
       channel <- eventChannel event
-
-      String uid <- H.lookup "user_id" data_
+      uid     <- event ^? ix "data" . ix "user_id" . _String
 
       pure . umap channel $ H.delete uid
-    rmPresenceMember _ _ = pure ()
 
     --  Apply a function to the users list of a presence channel
     umap channel f = do
@@ -165,21 +162,14 @@ awaitEvent = P $ \s -> decode <$> WS.receiveDataMessage (connection s) where
 
 -- | Launch all event handlers which are bound to the current event.
 handleEvent :: Either ByteString Value -> PusherClient ()
-handleEvent (Right event@(Object o)) = do
+handleEvent (Right event) = do
   state <- ask
 
-  let ty = eventType event
-  let ch = eventChannel event
-  let data_ = (\d -> case d of String s -> s; _ -> "") <$> H.lookup "data" o
+  let match (Handler e c _) = (isNothing e || e == Just (eventType event)) &&
+                              (isNothing c || c == eventChannel event)
 
-  let match (Handler e c _ _) = (isNothing e || e == Just ty) &&
-                                (isNothing c || c == ch)
-
-  allHandlers <- readTVarIO $ eventHandlers state
-  let handlers = filter match $ H.elems allHandlers
-
-  let handle (Handler _ _ d h) = h event $ data_ >>= d
-  mapM_ (fork . handle) handlers
+  handlers <- filter match . H.elems <$> readTVarIO (eventHandlers state)
+  mapM_ (fork . (\(Handler _ _ h) -> h event)) handlers
 -- Discard events which couldn't be decoded.
 handleEvent _ = pure ()
 

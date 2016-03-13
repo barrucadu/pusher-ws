@@ -112,17 +112,16 @@ defaultOptions = Options
 
 -------------------------------------------------------------------------------
 
--- | Event handlers: event name -> channel name -> decoder -> handler.
+-- | Event handlers: event name -> channel name -> handler.
 data Handler where
   Handler :: Maybe Text
           -> Maybe Channel
-          -> (Text -> Maybe a)
-          -> (Value -> Maybe a -> PusherClient ())
+          -> (Value -> PusherClient ())
           -> Handler
 
 -- Cheats a bit.
 instance NFData Handler where
-  rnf (Handler e c _ _) = rnf (e, c)
+  rnf (Handler e c _) = rnf (e, c)
 
 -------------------------------------------------------------------------------
 

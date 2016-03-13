@@ -7,8 +7,7 @@ module Network.Pusher.WebSockets.Event
   -- * Event Handlers
   , Binding
   , bind
-  , bindJSON
-  , bindWith
+  , bindAll
   , unbind
 
   -- * Client Events
@@ -16,9 +15,12 @@ module Network.Pusher.WebSockets.Event
   ) where
 
 import Control.Concurrent.STM (atomically, readTVar)
+import Control.Lens ((^?), ix)
 import Control.Monad.IO.Class (liftIO)
 import Data.Aeson (Value(..), decodeStrict', encode)
+import Data.Aeson.Lens (_String)
 import qualified Data.HashMap.Strict as H
+import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text.Encoding (encodeUtf8)
 import qualified Network.WebSockets as WS
@@ -32,29 +34,26 @@ import Network.Pusher.WebSockets.Internal
 -- If not present (which should never happen!), returns the empty
 -- string.
 eventType :: Value -> Text
-eventType (Object o) = maybe "" unJSON $ H.lookup "event" o where
-  unJSON (String s) = s
-  unJSON _ = ""
-eventType _ = ""
+eventType event = fromMaybe "" (event ^? ix "event" . _String)
 
 -- | Get the value of the \"channel\" field.
 --
 -- This will be @Nothing@ if the event was broadcast to all clients,
 -- with no channel restriction.
 eventChannel :: Value -> Maybe Channel
-eventChannel (Object o) = H.lookup "channel" o >>= unJSON where
-  unJSON (String s) = Just $ Channel s
-  unJSON _ = Nothing
-eventChannel _ = Nothing
+eventChannel event = fmap Channel (event ^? ix "channel" . _String)
 
 -------------------------------------------------------------------------------
 
 -- | Bind an event handler to an event type, optionally restricted to a
--- channel. If no event name is given, bind to all events.
+-- channel.
+--
+-- Attempts to decode the \"data\" field of the event as stringified
+-- JSON; if that fails, it is left as a string.
 --
 -- If multiple handlers match a received event, all will be
 -- executed. The order is unspecified, and may not be consistent.
-bind :: Maybe Text
+bind :: Text
      -- ^ Event name.
      -> Maybe Channel
      -- ^ Channel name: If @Nothing@, all events of that name are
@@ -62,40 +61,38 @@ bind :: Maybe Text
      -> (Value -> PusherClient ())
      -- ^ Event handler.
      -> PusherClient Binding
-bind event channel handler = bindWith (const Nothing) event channel $
-  \ev _ -> handler ev
+bind = bindGeneric . Just
 
--- | Variant of 'bind' which attempts to decode the \"data\" field of the event
--- as JSON.
-bindJSON :: Maybe Text
-         -- ^ Event name.
-         -> Maybe Channel
-         -- ^ Channel name.
-         -> (Value -> Maybe Value -> PusherClient ())
-         -- ^ Event handler. Second parameter is the possibly-decoded
-         -- \"data\" field.
-         -> PusherClient Binding
-bindJSON = bindWith $ decodeStrict' . encodeUtf8
+-- | Variant of 'bind' which binds to all events in the given channel;
+-- or all events if no channel.
+bindAll :: Maybe Channel -> (Value -> PusherClient ()) -> PusherClient Binding
+bindAll = bindGeneric Nothing
 
--- | Variant of 'bind' which attempts to decode the \"data\" field of
--- the event using some decoding function.
-bindWith :: (Text -> Maybe a)
-         -- ^ Decoder.
-         -> Maybe Text
-         -- ^ Event name.
-         -> Maybe Channel
-         -- ^ Channel name.
-         -> (Value -> Maybe a -> PusherClient ())
-         -- ^ Event handler.
-         -> PusherClient Binding
-bindWith decoder event channel handler = do
+-- | Internal: register a new event handler.
+bindGeneric :: Maybe Text -> Maybe Channel -> (Value -> PusherClient ())
+            -> PusherClient Binding
+bindGeneric event channel handler = do
   state <- ask
   liftIO . atomically $ do
     b@(Binding i) <- readTVar $ nextBinding state
     strictModifyTVar (nextBinding state) (const . Binding $ i+1)
-    let h = Handler event channel decoder handler
+    let h = Handler event channel wrappedHandler
     strictModifyTVar (eventHandlers state) (H.insert b h)
     pure b
+
+  where
+    -- Before invoking the handler, have a stab at decoding the data
+    -- field.
+    wrappedHandler ev@(Object o) =
+      let data_ = H.lookup "data" o >>= attemptDecode
+      in handler $ case data_ of
+           Just decoded -> Object $ H.adjust (const decoded) "data" o
+           Nothing -> ev
+    wrappedHandler ev = handler ev
+
+    -- Attempt to interpret as stringified JSON.
+    attemptDecode (String s) = decodeStrict' $ encodeUtf8 s
+    attemptDecode _ = Nothing
 
 -- | Remove a binding
 unbind :: Binding -> PusherClient ()
