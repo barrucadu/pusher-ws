@@ -3,13 +3,14 @@
 module Network.Pusher.WebSockets.Internal where
 
 import Control.Concurrent (ThreadId)
+import Control.Concurrent.STM (STM, TVar, atomically, newTVar, modifyTVar')
+import qualified Control.Concurrent.STM as STM
 import Control.DeepSeq (NFData(..), force)
 import Control.Exception (SomeException, catch)
 import Control.Monad.IO.Class (MonadIO(..))
 import Data.Aeson (Value(..))
 import Data.Hashable (Hashable(..))
 import qualified Data.HashMap.Strict as H
-import Data.IORef (IORef, newIORef, atomicModifyIORef')
 import Data.Maybe (fromMaybe)
 import Data.Text (Text, unpack)
 import qualified Network.WebSockets as WS
@@ -46,30 +47,30 @@ data ClientState = S
   -- ^ Network connection
   , options :: Options
   -- ^ Connection options
-  , idleTimer :: IORef (Maybe Int)
+  , idleTimer :: TVar (Maybe Int)
   -- ^ Inactivity timeout before a ping should be sent. Set by Pusher
   -- on connect.
-  , socketId :: IORef (Maybe Text)
+  , socketId :: TVar (Maybe Text)
   -- ^ Identifier of the socket. Set by Pusher on connect.
-  , threadStore :: IORef [ThreadId]
+  , threadStore :: TVar [ThreadId]
   -- ^ Currently live threads.
-  , eventHandlers :: IORef (H.HashMap Binding Handler)
+  , eventHandlers :: TVar (H.HashMap Binding Handler)
   -- ^ Event handlers.
-  , nextBinding :: IORef Binding
+  , nextBinding :: TVar Binding
   -- ^ Next free binding.
-  , presenceChannels :: IORef (H.HashMap Channel (Value, H.HashMap Text Value))
+  , presenceChannels :: TVar (H.HashMap Channel (Value, H.HashMap Text Value))
   -- ^ Connected presence channels
   }
 
 -- | State for a brand new connection.
 defaultClientState :: WS.Connection -> Options -> IO ClientState
-defaultClientState conn opts = do
-  defIdleTimer   <- newIORef Nothing
-  defSocketId    <- newIORef Nothing
-  defThreadStore <- newIORef []
-  defEHandlers   <- newIORef H.empty
-  defBinding     <- newIORef $ Binding 0
-  defPChannels    <- newIORef H.empty
+defaultClientState conn opts = atomically $ do
+  defIdleTimer   <- newTVar Nothing
+  defSocketId    <- newTVar Nothing
+  defThreadStore <- newTVar []
+  defEHandlers   <- newTVar H.empty
+  defBinding     <- newTVar $ Binding 0
+  defPChannels   <- newTVar H.empty
 
   pure S
     { connection       = conn
@@ -170,10 +171,17 @@ ask = P pure
 liftMaybe :: Maybe (PusherClient ()) -> PusherClient ()
 liftMaybe = fromMaybe $ pure ()
 
--- | Modify an @IORef@ strictly
-strictModifyIORef :: (MonadIO m, NFData a) => IORef a -> (a -> a) -> m ()
-strictModifyIORef ioref f =
-  liftIO $ atomicModifyIORef' ioref (\a -> (force $ f a, ()))
+-- | Modify a @TVar@ strictly.
+strictModifyTVar :: NFData a => TVar a -> (a -> a) -> STM ()
+strictModifyTVar tvar = modifyTVar' tvar . force
+
+-- | Modify a @TVar@ strictly in any @MonadIO@.
+strictModifyTVarIO :: (MonadIO m, NFData a) => TVar a -> (a -> a) -> m ()
+strictModifyTVarIO tvar = liftIO . atomically . strictModifyTVar tvar
+
+-- | Read a @TVar@ inside any @MonadIO@.
+readTVarIO :: MonadIO m => TVar a -> m a
+readTVarIO = liftIO . STM.readTVarIO
 
 -- | Catch all exceptions
 catchAll :: IO a -> (SomeException -> IO a) -> IO a

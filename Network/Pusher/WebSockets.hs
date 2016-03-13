@@ -37,12 +37,10 @@ import Control.Arrow (second)
 import Control.Concurrent (ThreadId, forkIO, killThread, myThreadId)
 import Control.Exception (bracket_, finally)
 import Control.Monad (forever)
-import Control.Monad.IO.Class (MonadIO(..))
 import Data.Aeson (Value(..), decode', decodeStrict')
 import Data.ByteString.Lazy (ByteString)
 import Data.Functor (void)
 import qualified Data.HashMap.Strict as H
-import Data.IORef (readIORef)
 import Data.Maybe (isNothing)
 import Data.Scientific (toBoundedInteger)
 import Data.Text (Text)
@@ -88,7 +86,7 @@ pusherWithKey key opts
     run client conn = do
       state <- defaultClientState conn opts
 
-      let killLive = readIORef (threadStore state) >>= mapM_ killThread
+      let killLive = readTVarIO (threadStore state) >>= mapM_ killThread
       finally (runClient (wrap client) state) killLive
 
     -- Register default event handlers and fork off handling thread.
@@ -118,8 +116,8 @@ defaultHandlers =
 
       pure $ do
         state <- ask
-        strictModifyIORef (idleTimer state) (const $ toBoundedInteger timeout)
-        strictModifyIORef (socketId state) (const $ Just socketid)
+        strictModifyTVarIO (idleTimer state) (const $ toBoundedInteger timeout)
+        strictModifyTVarIO (socketId state) (const $ Just socketid)
     establishConnection _ _ = pure ()
 
     -- Save the list of users
@@ -153,7 +151,7 @@ defaultHandlers =
     --  Apply a function to the users list of a presence channel
     umap channel f = do
       state <- ask
-      strictModifyIORef (presenceChannels state) $ H.adjust (second f) channel
+      strictModifyTVarIO (presenceChannels state) $ H.adjust (second f) channel
 
 -- | Block and wait for an event.
 awaitEvent :: PusherClient (Either ByteString Value)
@@ -177,7 +175,7 @@ handleEvent (Right event@(Object o)) = do
   let match (Handler e c _ _) = (isNothing e || e == Just ty) &&
                                 (isNothing c || c == ch)
 
-  allHandlers <- liftIO . readIORef $ eventHandlers state
+  allHandlers <- readTVarIO $ eventHandlers state
   let handlers = filter match $ H.elems allHandlers
 
   let handle (Handler _ _ d h) = h event $ data_ >>= d
@@ -194,9 +192,9 @@ fork (P action) = P $ \s -> forkIO (run s) where
     -- Add the thread ID to the list
     setup = do
       tid <- myThreadId
-      strictModifyIORef (threadStore s) (tid:)
+      strictModifyTVarIO (threadStore s) (tid:)
 
     -- Remove the thread ID from the list
     teardown = do
       tid <- myThreadId
-      strictModifyIORef (threadStore s) (filter (/=tid))
+      strictModifyTVarIO (threadStore s) (filter (/=tid))

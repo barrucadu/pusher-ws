@@ -12,7 +12,6 @@ import Control.Lens ((^.), (&), (.~))
 import Control.Monad.IO.Class (MonadIO(..))
 import Data.Aeson (Value(..))
 import qualified Data.HashMap.Strict as H
-import Data.IORef (readIORef)
 import Data.Maybe (fromMaybe)
 import Data.Text (Text, isPrefixOf)
 import qualified Network.Wreq as W
@@ -54,7 +53,7 @@ unsubscribe channel = do
 
   -- Remove the presence channel
   state <- ask
-  strictModifyIORef (presenceChannels state) $ H.delete channel
+  strictModifyTVarIO (presenceChannels state) $ H.delete channel
 
 -- | Return the list of all members in a presence channel.
 --
@@ -64,7 +63,7 @@ members :: Channel -> PusherClient (H.HashMap Text Value)
 members channel = do
   state <- ask
 
-  channels <- liftIO . readIORef $ presenceChannels state
+  channels <- readTVarIO $ presenceChannels state
   pure . fromMaybe H.empty $ snd <$> H.lookup channel channels
   
 -- | Return information about the local user in a presence channel.
@@ -75,7 +74,7 @@ whoami :: Channel -> PusherClient Value
 whoami channel = do
   state <- ask
 
-  channels <- liftIO . readIORef $ presenceChannels state
+  channels <- readTVarIO $ presenceChannels state
   pure . fromMaybe Null $ fst <$> H.lookup channel channels
 
 -------------------------------------------------------------------------------
@@ -85,7 +84,7 @@ authorise :: Channel -> PusherClient (Maybe Value)
 authorise (Channel channel) = do
   state <- ask
   let authURL = authorisationURL $ options state
-  sockID <- liftIO . readIORef $ socketId state
+  sockID <- readTVarIO $ socketId state
 
   case (authURL, sockID) of
     (Just authURL', Just sockID') -> liftIO $ authorise' authURL' sockID'

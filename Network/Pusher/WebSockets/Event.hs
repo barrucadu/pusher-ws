@@ -15,10 +15,10 @@ module Network.Pusher.WebSockets.Event
   , triggerEvent
   ) where
 
+import Control.Concurrent.STM (atomically, readTVar)
 import Control.Monad.IO.Class (liftIO)
 import Data.Aeson (Value(..), decodeStrict', encode)
 import qualified Data.HashMap.Strict as H
-import Data.IORef (readIORef)
 import Data.Text (Text)
 import Data.Text.Encoding (encodeUtf8)
 import qualified Network.WebSockets as WS
@@ -90,17 +90,18 @@ bindWith :: (Text -> Maybe a)
          -> PusherClient Binding
 bindWith decoder event channel handler = do
   state <- ask
-  b@(Binding i) <- liftIO $ readIORef (nextBinding state)
-  liftIO $ strictModifyIORef (nextBinding state) (const . Binding $ i+1)
-  let h = Handler event channel decoder handler
-  strictModifyIORef (eventHandlers state) (H.insert b h)
-  pure b
+  liftIO . atomically $ do
+    b@(Binding i) <- readTVar $ nextBinding state
+    strictModifyTVar (nextBinding state) (const . Binding $ i+1)
+    let h = Handler event channel decoder handler
+    strictModifyTVar (eventHandlers state) (H.insert b h)
+    pure b
 
 -- | Remove a binding
 unbind :: Binding -> PusherClient ()
 unbind binding = do
   state <- ask
-  strictModifyIORef (eventHandlers state) (H.delete binding)
+  strictModifyTVarIO (eventHandlers state) (H.delete binding)
 
 -------------------------------------------------------------------------------
 

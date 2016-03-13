@@ -30,6 +30,7 @@ library
                      , hashable
                      , lens
                      , scientific
+                     , stm
                      , text
                      , transformers
                      , unordered-containers
