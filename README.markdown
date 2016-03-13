@@ -4,7 +4,7 @@ pusher-ws
 An implementation of the Pusher WebSocket (client) protocol in
 Haskell.
 
-This is very incomplete! Current features:
+Current features:
 
 - ws:// and wss:// protocols.
 - Clusters.
@@ -12,8 +12,16 @@ This is very incomplete! Current features:
 - Unsubscribing from channels.
 - Authorisation for private and presence channels.
 - Binding event handlers.
-- Sending events.
+- Unbinding event handlers
+- Sending client events.
 - Threads which automatically get cleaned up on connection close.
+
+Missing features:
+
+- Inactivity pinging
+- Reconnection
+- Connection state events
+- Pusher error handling
 
 Example
 -------
