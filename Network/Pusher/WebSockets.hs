@@ -56,6 +56,7 @@ import Data.Aeson (Value(..), decode')
 import Data.Aeson.Lens (_Integral, _Object, _String, _Value)
 import Data.ByteString.Lazy (ByteString)
 import qualified Data.HashMap.Strict as H
+import qualified Data.Set as S
 import Data.Text (Text)
 import Network.Socket (HostName, PortNumber)
 import Network.WebSockets (DataMessage(..), receiveDataMessage)
@@ -211,9 +212,9 @@ fork (P action) = P (forkIO . run) where
     -- Add the thread ID to the list
     setup = do
       tid <- myThreadId
-      strictModifyTVarIO (threadStore s) (tid:)
+      strictModifyTVarIO (threadStore s) (S.insert tid)
 
     -- Remove the thread ID from the list
     teardown = do
       tid <- myThreadId
-      strictModifyTVarIO (threadStore s) (filter (/=tid))
+      strictModifyTVarIO (threadStore s) (S.delete tid)

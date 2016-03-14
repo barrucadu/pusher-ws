@@ -14,6 +14,7 @@ import Control.Monad.IO.Class (MonadIO(..))
 import Data.Aeson (Value(..))
 import Data.Hashable (Hashable(..))
 import qualified Data.HashMap.Strict as H
+import qualified Data.Set as S
 import Data.Text (Text, unpack)
 import Network.Socket (HostName, PortNumber)
 import Network.WebSockets (Connection)
@@ -55,7 +56,7 @@ data ClientState = S
   -- on connect.
   , socketId :: TVar (Maybe Text)
   -- ^ Identifier of the socket. Set by Pusher on connect.
-  , threadStore :: TVar [ThreadId]
+  , threadStore :: TVar (S.Set ThreadId)
   -- ^ Currently live threads.
   , eventHandlers :: TVar (H.HashMap Binding Handler)
   -- ^ Event handlers.
@@ -70,7 +71,7 @@ defaultClientState :: Connection -> Options -> IO ClientState
 defaultClientState conn opts = atomically $ do
   defIdleTimer   <- newTVar Nothing
   defSocketId    <- newTVar Nothing
-  defThreadStore <- newTVar []
+  defThreadStore <- newTVar S.empty
   defEHandlers   <- newTVar H.empty
   defBinding     <- newTVar (Binding 0)
   defPChannels   <- newTVar H.empty
