@@ -180,7 +180,7 @@ defaultHandlers =
 
 -- | Block and wait for an event.
 awaitEvent :: PusherClient (Either ByteString Value)
-awaitEvent = P $ \s -> decode <$> receiveDataMessage (connection s) where
+awaitEvent = P (fmap decode . receiveDataMessage . connection) where
   decode (Text   bs) = maybe (Left bs) Right (decode' bs)
   decode (Binary bs) = Left bs
 
@@ -201,7 +201,7 @@ handleEvent _ = pure ()
 
 -- | Fork a thread which will be killed when the connection is closed.
 fork :: PusherClient () -> PusherClient ThreadId
-fork (P action) = P $ \s -> forkIO (run s) where
+fork (P action) = P (forkIO . run) where
   run s = bracket_ setup teardown (action s) where
     -- Add the thread ID to the list
     setup = do
