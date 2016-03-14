@@ -169,7 +169,7 @@ instance NFData Channel where
   rnf (Channel c) = rnf c
 
 instance Show Channel where
-  show (Channel c) = unpack c
+  show (Channel c) = "<<channel " ++ unpack c ++ ">>"
 
 instance Hashable Channel where
   hashWithSalt salt (Channel c) = hashWithSalt salt c
