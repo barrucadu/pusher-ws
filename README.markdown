@@ -18,7 +18,6 @@ Current features:
 
 Missing features:
 
-- Inactivity pinging.
 - Reconnection.
 - Connection state events.
 - Pusher error handling.

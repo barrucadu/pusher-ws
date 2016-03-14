@@ -51,6 +51,7 @@ import Data.Version (Version(..), showVersion)
 
 -- library imports
 import Control.Lens ((^?), ix)
+import Control.Monad.IO.Class (liftIO)
 import Data.Aeson (Value(..), decode')
 import Data.Aeson.Lens (_Integral, _Object, _String, _Value)
 import Data.ByteString.Lazy (ByteString)
@@ -150,6 +151,10 @@ defaultHandlers =
         state <- ask
         strictModifyTVarIO (idleTimer state) (const (Just timeout))
         strictModifyTVarIO (socketId  state) (const (Just socketid))
+        -- This will do more pinging than necessary, but it's far
+        -- simpler than keeping track of the actual inactivity, and
+        -- ensures that enough pings are sent.
+        liftIO $ WS.forkPingThread (connection state) timeout
 
     -- Save the list of users
     addPresenceChannel event = liftMaybe $ do
