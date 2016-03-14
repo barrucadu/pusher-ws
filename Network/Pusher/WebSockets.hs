@@ -12,6 +12,8 @@ module Network.Pusher.WebSockets
   , Channel
   , subscribe
   , unsubscribe
+
+  -- ** Presence Channels
   , members
   , whoami
 
@@ -19,13 +21,13 @@ module Network.Pusher.WebSockets
   , eventType
   , eventChannel
 
-  -- * Event Handlers
+  -- ** Event Handlers
   , Binding
   , bind
   , bindAll
   , unbind
 
-  -- * Client Events
+  -- ** Client Events
   , triggerEvent
 
   -- * Utilities
