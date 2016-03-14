@@ -2,20 +2,23 @@
 
 module Network.Pusher.WebSockets.Internal where
 
+-- 'base' imports
 import Control.Concurrent (ThreadId)
+import Control.Exception (SomeException, catch)
+import Data.Maybe (fromMaybe)
+import Data.String (IsString(..))
+
+-- library imports
 import Control.Concurrent.STM (STM, TVar, atomically, newTVar, modifyTVar')
 import qualified Control.Concurrent.STM as STM
 import Control.DeepSeq (NFData(..), force)
-import Control.Exception (SomeException, catch)
 import Control.Monad.IO.Class (MonadIO(..))
 import Data.Aeson (Value(..))
 import Data.Hashable (Hashable(..))
 import qualified Data.HashMap.Strict as H
-import Data.Maybe (fromMaybe)
-import Data.String (IsString(..))
 import Data.Text (Text, unpack)
 import Network.Socket (HostName, PortNumber)
-import qualified Network.WebSockets as WS
+import Network.WebSockets (Connection)
 
 -------------------------------------------------------------------------------
 
@@ -45,7 +48,7 @@ instance MonadIO PusherClient where
 
 -- | Private state for the client.
 data ClientState = S
-  { connection :: WS.Connection
+  { connection :: Connection
   -- ^ Network connection
   , options :: Options
   -- ^ Connection options
@@ -65,7 +68,7 @@ data ClientState = S
   }
 
 -- | State for a brand new connection.
-defaultClientState :: WS.Connection -> Options -> IO ClientState
+defaultClientState :: Connection -> Options -> IO ClientState
 defaultClientState conn opts = atomically $ do
   defIdleTimer   <- newTVar Nothing
   defSocketId    <- newTVar Nothing

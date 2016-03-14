@@ -8,6 +8,7 @@ module Network.Pusher.WebSockets.Channel
   , whoami
   ) where
 
+-- library imports
 import Control.Lens ((^.), (&), (.~))
 import Control.Monad.IO.Class (MonadIO(..))
 import Data.Aeson (Value(..))
@@ -15,6 +16,7 @@ import qualified Data.HashMap.Strict as H
 import Data.Text (Text, isPrefixOf)
 import qualified Network.Wreq as W
 
+-- local imports
 import Network.Pusher.WebSockets.Event
 import Network.Pusher.WebSockets.Internal
 

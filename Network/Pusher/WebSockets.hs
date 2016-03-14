@@ -40,24 +40,29 @@ module Network.Pusher.WebSockets
   , makeURL
   ) where
 
+-- 'base' imports
 import Control.Arrow (second)
 import Control.Concurrent (ThreadId, forkIO, killThread, myThreadId)
 import Control.Exception (bracket_, finally)
-import Control.Lens ((^?), ix)
 import Control.Monad (forever)
+import Data.Functor (void)
+import Data.Maybe (isNothing)
+import Data.Version (Version(..), showVersion)
+
+-- library imports
+import Control.Lens ((^?), ix)
 import Data.Aeson (Value(..), decode', decodeStrict')
 import Data.Aeson.Lens (_Integral, _Object, _String, _Value)
 import Data.ByteString.Lazy (ByteString)
-import Data.Functor (void)
 import qualified Data.HashMap.Strict as H
-import Data.Maybe (isNothing)
 import Data.Text (Text)
 import Data.Text.Encoding (encodeUtf8)
-import Data.Version (Version(..), showVersion)
 import Network.Socket (HostName, PortNumber)
+import Network.WebSockets (DataMessage(..), receiveDataMessage)
 import qualified Network.WebSockets as WS
-import qualified Wuss as WS (runSecureClient)
+import Wuss (runSecureClient)
 
+-- local imports
 import Network.Pusher.WebSockets.Channel
 import Network.Pusher.WebSockets.Event
 import Network.Pusher.WebSockets.Internal
@@ -71,7 +76,7 @@ import Paths_pusher_ws (version)
 -- client terminates, the connection is closed.
 pusherWithKey :: Key -> Options -> PusherClient a -> IO a
 pusherWithKey key opts
-  | encrypted opts = WS.runSecureClient host port path . run
+  | encrypted opts = runSecureClient host port path . run
   | otherwise      = WS.runClient host (fromIntegral port) path . run
 
   where
@@ -176,13 +181,13 @@ defaultHandlers =
 
 -- | Block and wait for an event.
 awaitEvent :: PusherClient (Either ByteString Value)
-awaitEvent = P $ \s -> decode <$> WS.receiveDataMessage (connection s) where
-  decode (WS.Text bs) = maybe (Left bs) Right $ do
+awaitEvent = P $ \s -> decode <$> receiveDataMessage (connection s) where
+  decode (Text bs) = maybe (Left bs) Right $ do
     Object o <- decode' bs
     String d <- H.lookup "data" o
     data_    <- decodeStrict' (encodeUtf8 d)
     pure (Object (H.adjust (const data_) "data" o))
-  decode (WS.Binary bs) = Left bs
+  decode (Binary bs) = Left bs
 
 -- | Launch all event handlers which are bound to the current event.
 handleEvent :: Either ByteString Value -> PusherClient ()

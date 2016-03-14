@@ -14,17 +14,21 @@ module Network.Pusher.WebSockets.Event
   , triggerEvent
   ) where
 
+-- 'base' imports
+import Data.Maybe (fromMaybe)
+
+-- library imports
 import Control.Concurrent.STM (atomically, readTVar)
 import Control.Lens ((^?), ix)
 import Control.Monad.IO.Class (liftIO)
 import Data.Aeson (Value(..), decodeStrict', encode)
 import Data.Aeson.Lens (_String)
 import qualified Data.HashMap.Strict as H
-import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text.Encoding (encodeUtf8)
-import qualified Network.WebSockets as WS
+import Network.WebSockets (DataMessage(Text), sendDataMessage)
 
+-- local imports
 import Network.Pusher.WebSockets.Internal
 
 -------------------------------------------------------------------------------
@@ -116,5 +120,5 @@ triggerEvent event channel data_ = sendJSON msg where
 sendJSON :: Value -> PusherClient ()
 sendJSON data_ = do
   state <- ask
-  let message = WS.Text (encode data_)
-  liftIO (WS.sendDataMessage (connection state) message)
+  let message = Text (encode data_)
+  liftIO (sendDataMessage (connection state) message)
