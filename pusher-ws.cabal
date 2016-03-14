@@ -30,6 +30,7 @@ library
                      , hashable
                      , lens
                      , lens-aeson
+                     , network
                      , scientific
                      , stm
                      , text

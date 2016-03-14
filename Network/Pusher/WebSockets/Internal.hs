@@ -12,7 +12,9 @@ import Data.Aeson (Value(..))
 import Data.Hashable (Hashable(..))
 import qualified Data.HashMap.Strict as H
 import Data.Maybe (fromMaybe)
+import Data.String (IsString(..))
 import Data.Text (Text, unpack)
+import Network.Socket (HostName, PortNumber)
 import qualified Network.WebSockets as WS
 
 -------------------------------------------------------------------------------
@@ -100,8 +102,11 @@ data Options = Options
   -- hostnames for the connection. This parameter is mandatory when
   -- the app is created in a different cluster to the default
   -- us-east-1. Defaults to @MT1@.
+
+  , pusherURL :: Maybe (HostName, PortNumber, Key -> String)
+  -- ^ The host, port, and path to use instead of the standard Pusher
+  -- servers. If set, the cluster is ignored. Defaults to @Nothing@.
   }
-  deriving (Eq, Read, Show)
 
 -- | Clusters correspond to geographical regions where apps can be
 -- assigned to.
@@ -111,12 +116,26 @@ data Cluster
   | AP1 -- ^ The ap-southeast-1 cluster.
   deriving (Eq, Ord, Bounded, Enum, Read, Show)
 
+instance NFData Cluster where
+  rnf c = c `seq` ()
+
+-- | Your application's API key.
+newtype Key = Key String
+   deriving (Eq, Ord, Show, Read)
+
+instance IsString Key where
+  fromString = Key
+
+instance NFData Key where
+  rnf (Key k) = rnf k
+
 -- | See 'Options' field documentation for what is set here.
 defaultOptions :: Options
 defaultOptions = Options
-  { encrypted = True
+  { encrypted        = True
   , authorisationURL = Nothing
-  , cluster = MT1
+  , cluster          = MT1
+  , pusherURL        = Nothing
   }
 
 -- | The region name of a cluster.

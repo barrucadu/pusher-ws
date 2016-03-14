@@ -4,11 +4,11 @@
 module Network.Pusher.WebSockets
   ( -- * Connection
     PusherClient
-  , pusherWithKey
+  , Key(..)
   , Options(..)
-  , defaultOptions
   , Cluster(..)
-  , clusterName
+  , pusherWithKey
+  , defaultOptions
 
   -- * Channels
   , Channel
@@ -32,8 +32,12 @@ module Network.Pusher.WebSockets
   -- ** Client Events
   , triggerEvent
 
-  -- * Utilities
+  -- * Concurrency
   , fork
+
+  -- * Utilities
+  , clusterName
+  , makeURL
   ) where
 
 import Control.Arrow (second)
@@ -50,13 +54,14 @@ import Data.Maybe (isNothing)
 import Data.Text (Text)
 import Data.Text.Encoding (encodeUtf8)
 import Data.Version (Version(..), showVersion)
+import Network.Socket (HostName, PortNumber)
 import qualified Network.WebSockets as WS
 import qualified Wuss as WS (runSecureClient)
-import Paths_pusher_ws (version)
 
 import Network.Pusher.WebSockets.Channel
 import Network.Pusher.WebSockets.Event
 import Network.Pusher.WebSockets.Internal
+import Paths_pusher_ws (version)
 
 -------------------------------------------------------------------------------
 
@@ -64,27 +69,13 @@ import Network.Pusher.WebSockets.Internal
 --
 -- Takes the application key and options, and runs a client. When the
 -- client terminates, the connection is closed.
-pusherWithKey :: String -> Options -> PusherClient a -> IO a
+pusherWithKey :: Key -> Options -> PusherClient a -> IO a
 pusherWithKey key opts
-  | encrypted opts = WS.runSecureClient host 443 path . run
-  | otherwise      = WS.runClient       host  80 path . run
+  | encrypted opts = WS.runSecureClient host port path . run
+  | otherwise      = WS.runClient host (fromIntegral port) path . run
 
   where
-    host
-      -- The primary cluster has a different domain to all the others
-      | cluster opts == MT1 = "ws.pusherapp.com"
-      | otherwise = "ws-" ++ clusterName (cluster opts) ++ ".pusher.com"
-
-    path = "/app/"
-        ++ key
-        ++ "?client=haskell-pusher-ws&protocol=7&version="
-        ++ showVersion semver
-
-    -- The server doesn't work with a 4-component version number, my
-    -- guess is that it's assuming semver.
-    semver = Version { versionBranch = take 3 $ versionBranch version
-                     , versionTags = []
-                     }
+    (host, port, path) = makeURL key opts
 
     -- Set-up and tear-down
     run client conn = do
@@ -98,6 +89,34 @@ pusherWithKey key opts
       mapM_ (\(e, h) -> bind e Nothing h) defaultHandlers
       void . fork . forever $ awaitEvent >>= handleEvent
       client
+
+-- | The hostname, port, and path (including querystring) to connect
+-- to.
+makeURL :: Key -> Options -> (HostName, PortNumber, String)
+makeURL key@(Key k) opts = case pusherURL opts of
+  Just (host, port, path) -> (host, port, path key ++ queryString)
+  Nothing -> (defaultHost, defaultPort, defaultPath)
+
+  where
+    defaultHost
+      -- The primary cluster has a different domain to all the others
+      | cluster opts == MT1 = "ws.pusherapp.com"
+      | otherwise = "ws-" ++ clusterName (cluster opts) ++ ".pusher.com"
+
+    defaultPort
+      | encrypted opts = 443
+      | otherwise = 80
+
+    defaultPath = "/app/" ++ k ++ queryString
+
+    queryString = "?client=haskell-pusher-ws&protocol=7&version="
+               ++ showVersion semver
+
+    -- The server doesn't work with a 4-component version number, my
+    -- guess is that it's assuming semver.
+    semver = Version { versionBranch = take 3 $ versionBranch version
+                     , versionTags = []
+                     }
 
 -- | Default event handlers
 defaultHandlers :: [(Text, Value -> PusherClient ())]
