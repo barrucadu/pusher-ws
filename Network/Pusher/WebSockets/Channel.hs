@@ -12,7 +12,6 @@ import Control.Lens ((^.), (&), (.~))
 import Control.Monad.IO.Class (MonadIO(..))
 import Data.Aeson (Value(..))
 import qualified Data.HashMap.Strict as H
-import Data.Maybe (fromMaybe)
 import Data.Text (Text, isPrefixOf)
 import qualified Network.Wreq as W
 
@@ -32,18 +31,18 @@ subscribe channel = do
   case data_ of
     Just authdata -> do
       triggerEvent "pusher:subscribe" Nothing authdata
-      pure $ Just handle
+      pure (Just handle)
     Nothing -> pure Nothing
 
   where
     getSubscribeData
       | "private-"  `isPrefixOf` channel = authorise handle
       | "presence-" `isPrefixOf` channel = authorise handle
-      | otherwise = pure $ Just channelData
+      | otherwise = pure (Just channelData)
 
     handle = Channel channel
 
-    channelData = Object $ H.fromList [("channel", String channel)]
+    channelData = Object (H.fromList [("channel", String channel)])
 
 -- | Unsubscribe from a channel.
 unsubscribe :: Channel -> PusherClient ()
@@ -53,7 +52,7 @@ unsubscribe channel = do
 
   -- Remove the presence channel
   state <- ask
-  strictModifyTVarIO (presenceChannels state) $ H.delete channel
+  strictModifyTVarIO (presenceChannels state) (H.delete channel)
 
 -- | Return the list of all members in a presence channel.
 --
@@ -63,8 +62,8 @@ members :: Channel -> PusherClient (H.HashMap Text Value)
 members channel = do
   state <- ask
 
-  channels <- readTVarIO $ presenceChannels state
-  pure . fromMaybe H.empty $ snd <$> H.lookup channel channels
+  chan <- H.lookup channel <$> readTVarIO (presenceChannels state)
+  pure (maybe H.empty snd chan)
   
 -- | Return information about the local user in a presence channel.
 --
@@ -74,8 +73,8 @@ whoami :: Channel -> PusherClient Value
 whoami channel = do
   state <- ask
 
-  channels <- readTVarIO $ presenceChannels state
-  pure . fromMaybe Null $ fst <$> H.lookup channel channels
+  chan <- H.lookup channel <$> readTVarIO (presenceChannels state)
+  pure (maybe Null fst chan)
 
 -------------------------------------------------------------------------------
 
@@ -83,16 +82,17 @@ whoami channel = do
 authorise :: Channel -> PusherClient (Maybe Value)
 authorise (Channel channel) = do
   state <- ask
-  let authURL = authorisationURL $ options state
-  sockID <- readTVarIO $ socketId state
+  let authURL = authorisationURL (options state)
+  sockID <- readTVarIO (socketId state)
 
   case (authURL, sockID) of
-    (Just authURL', Just sockID') -> liftIO $ authorise' authURL' sockID'
+    (Just authURL', Just sockID') -> liftIO (authorise' authURL' sockID')
     _ -> pure Nothing
 
   where
-    authorise' authURL sockID = flip catchAll (const $ pure Nothing) $ do
+    authorise' authURL sockID = ignoreAll Nothing $ do
       let params = W.defaults & W.param "channel_name" .~ [channel]
                               & W.param "socket_id"    .~ [sockID]
       r <- W.asValue =<< W.getWith params authURL
-      pure . Just $ r ^. W.responseBody
+      let body = r ^. W.responseBody
+      pure (Just body)

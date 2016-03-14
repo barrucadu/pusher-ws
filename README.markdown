@@ -48,7 +48,7 @@ pusherWithKey key defaultOptions $ do
 
   -- Loop forever, as the connection is closed when this action
   -- terminates.
-  forever $ liftIO yield
+  forever (liftIO yield)
 ```
 
 Contributing

@@ -74,8 +74,9 @@ bindGeneric :: Maybe Text -> Maybe Channel -> (Value -> PusherClient ())
 bindGeneric event channel handler = do
   state <- ask
   liftIO . atomically $ do
-    b@(Binding i) <- readTVar $ nextBinding state
-    strictModifyTVar (nextBinding state) (const . Binding $ i+1)
+    b@(Binding i) <- readTVar (nextBinding state)
+    let b' = Binding (i+1)
+    strictModifyTVar (nextBinding state) (const b')
     let h = Handler event channel wrappedHandler
     strictModifyTVar (eventHandlers state) (H.insert b h)
     pure b
@@ -86,12 +87,12 @@ bindGeneric event channel handler = do
     wrappedHandler ev@(Object o) =
       let data_ = H.lookup "data" o >>= attemptDecode
       in handler $ case data_ of
-           Just decoded -> Object $ H.adjust (const decoded) "data" o
+           Just decoded -> Object (H.adjust (const decoded) "data" o)
            Nothing -> ev
     wrappedHandler ev = handler ev
 
     -- Attempt to interpret as stringified JSON.
-    attemptDecode (String s) = decodeStrict' $ encodeUtf8 s
+    attemptDecode (String s) = decodeStrict' (encodeUtf8 s)
     attemptDecode _ = Nothing
 
 -- | Remove a binding
@@ -115,4 +116,5 @@ triggerEvent event channel data_ = sendJSON msg where
 sendJSON :: Value -> PusherClient ()
 sendJSON data_ = do
   state <- ask
-  liftIO $ WS.sendDataMessage (connection state) (WS.Text $ encode data_)
+  let message = WS.Text (encode data_)
+  liftIO (WS.sendDataMessage (connection state) message)

@@ -26,7 +26,7 @@ import qualified Network.WebSockets as WS
 newtype PusherClient a = P { runClient :: ClientState -> IO a }
 
 instance Functor PusherClient where
-  fmap f (P a) = P $ fmap f . a
+  fmap f (P a) = P (fmap f . a)
 
 instance Applicative PusherClient where
   pure = P . const . pure
@@ -71,7 +71,7 @@ defaultClientState conn opts = atomically $ do
   defSocketId    <- newTVar Nothing
   defThreadStore <- newTVar []
   defEHandlers   <- newTVar H.empty
-  defBinding     <- newTVar $ Binding 0
+  defBinding     <- newTVar (Binding 0)
   defPChannels   <- newTVar H.empty
 
   pure S
@@ -202,7 +202,7 @@ ask = P pure
 
 -- | Turn a @Maybe@ action into a @PusherClient@ action.
 liftMaybe :: Maybe (PusherClient ()) -> PusherClient ()
-liftMaybe = fromMaybe $ pure ()
+liftMaybe = fromMaybe (pure ())
 
 -- | Modify a @TVar@ strictly.
 strictModifyTVar :: NFData a => TVar a -> (a -> a) -> STM ()
@@ -216,6 +216,8 @@ strictModifyTVarIO tvar = liftIO . atomically . strictModifyTVar tvar
 readTVarIO :: MonadIO m => TVar a -> m a
 readTVarIO = liftIO . STM.readTVarIO
 
--- | Catch all exceptions
-catchAll :: IO a -> (SomeException -> IO a) -> IO a
-catchAll = catch
+-- | Ignore all exceptions by supplying a default value.
+ignoreAll :: a -> IO a -> IO a
+ignoreAll fallback act = catchAll act (const (pure fallback)) where
+  catchAll :: IO a -> (SomeException -> IO a) -> IO a
+  catchAll = catch

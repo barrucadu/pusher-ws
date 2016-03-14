@@ -87,7 +87,8 @@ pusherWithKey key opts
     -- Register default event handlers and fork off handling thread.
     wrap client = do
       mapM_ (\(e, h) -> bind e Nothing h) defaultHandlers
-      void . fork . forever $ awaitEvent >>= handleEvent
+      let go = forever (awaitEvent >>= handleEvent)
+      void (fork go)
       client
 
 -- | The hostname, port, and path (including querystring) to connect
@@ -114,7 +115,7 @@ makeURL key@(Key k) opts = case pusherURL opts of
 
     -- The server doesn't work with a 4-component version number, my
     -- guess is that it's assuming semver.
-    semver = Version { versionBranch = take 3 $ versionBranch version
+    semver = Version { versionBranch = take 3 (versionBranch version)
                      , versionTags = []
                      }
 
@@ -130,7 +131,7 @@ defaultHandlers =
 
   where
     -- Immediately send a pusher:pong
-    pingHandler _ = triggerEvent "pusher:pong" Nothing $ Object H.empty
+    pingHandler _ = triggerEvent "pusher:pong" Nothing (Object H.empty)
 
     -- Record the activity timeout and socket ID.
     --
@@ -143,15 +144,15 @@ defaultHandlers =
 
       pure $ do
         state <- ask
-        strictModifyTVarIO (idleTimer state) (const $ Just timeout)
-        strictModifyTVarIO (socketId  state) (const $ Just socketid)
+        strictModifyTVarIO (idleTimer state) (const (Just timeout))
+        strictModifyTVarIO (socketId  state) (const (Just socketid))
 
     -- Save the list of users
     addPresenceChannel event = liftMaybe $ do
       channel <- eventChannel event
       users   <- event ^? ix "data" . ix "hash" . _Object
 
-      pure . umap channel $ const users
+      pure (umap channel (const users))
 
     -- Add a user to the list
     addPresenceMember event = liftMaybe $ do
@@ -159,19 +160,19 @@ defaultHandlers =
       uid     <- event ^? ix "data" . ix "user_id"   . _String
       info    <- event ^? ix "data" . ix "user_info" . _Value
 
-      pure . umap channel $ H.insert uid info
+      pure (umap channel (H.insert uid info))
 
     -- Remove a user from the list
     rmPresenceMember event = liftMaybe $ do
       channel <- eventChannel event
       uid     <- event ^? ix "data" . ix "user_id" . _String
 
-      pure . umap channel $ H.delete uid
+      pure (umap channel (H.delete uid))
 
     --  Apply a function to the users list of a presence channel
     umap channel f = do
       state <- ask
-      strictModifyTVarIO (presenceChannels state) $ H.adjust (second f) channel
+      strictModifyTVarIO (presenceChannels state) (H.adjust (second f) channel)
 
 -- | Block and wait for an event.
 awaitEvent :: PusherClient (Either ByteString Value)
@@ -179,8 +180,8 @@ awaitEvent = P $ \s -> decode <$> WS.receiveDataMessage (connection s) where
   decode (WS.Text bs) = maybe (Left bs) Right $ do
     Object o <- decode' bs
     String d <- H.lookup "data" o
-    data_    <- decodeStrict' $ encodeUtf8 d
-    pure . Object $ H.adjust (const data_) "data" o
+    data_    <- decodeStrict' (encodeUtf8 d)
+    pure (Object (H.adjust (const data_) "data" o))
   decode (WS.Binary bs) = Left bs
 
 -- | Launch all event handlers which are bound to the current event.
