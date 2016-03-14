@@ -19,7 +19,7 @@ import Data.Maybe (fromMaybe)
 
 -- library imports
 import Control.Concurrent.STM (atomically, readTVar)
-import Control.Lens ((^?), ix)
+import Control.Lens ((^?), (.~), (&), ix)
 import Control.Monad.IO.Class (liftIO)
 import Data.Aeson (Value(..), decodeStrict', encode)
 import Data.Aeson.Lens (_String)
@@ -90,7 +90,7 @@ bindGeneric event channel handler = do
     -- field.
     wrappedHandler ev@(Object o) = handler $
       case H.lookup "data" o >>= attemptDecode of
-        Just decoded -> Object (H.adjust (const decoded) "data" o)
+        Just decoded -> ev & ix "data" .~ decoded
         Nothing -> ev
     wrappedHandler ev = handler ev
 

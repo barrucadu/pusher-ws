@@ -34,9 +34,9 @@ subscribe :: Text -> PusherClient (Maybe Channel)
 subscribe channel = do
   data_ <- getSubscribeData
   case data_ of
-    Just (Object authdata) -> do
-      let channelData = H.insert "channel" (String channel) authdata
-      triggerEvent "pusher:subscribe" Nothing (Object channelData)
+    Just val -> do
+      let channelData = val & ix "channel" .~ String channel
+      triggerEvent "pusher:subscribe" Nothing channelData
       pure (Just handle)
     _ -> pure Nothing
 
