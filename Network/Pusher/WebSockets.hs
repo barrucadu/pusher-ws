@@ -85,7 +85,7 @@ pusherWithKey key opts
 
     -- Set-up and tear-down
     run client conn = do
-      state <- defaultClientState conn opts
+      state <- defaultClientState conn key opts
 
       let killLive = readTVarIO (threadStore state) >>= mapM_ killThread
       finally (runClient (wrap client) state) killLive

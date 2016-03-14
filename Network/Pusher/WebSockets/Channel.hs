@@ -8,12 +8,15 @@ module Network.Pusher.WebSockets.Channel
   , whoami
   ) where
 
+-- 'base' imports
+import Data.Monoid ((<>))
+
 -- library imports
-import Control.Lens ((^.), (&), (.~))
+import Control.Lens ((^.), (&), (.~), (%~), ix)
 import Control.Monad.IO.Class (MonadIO(..))
 import Data.Aeson (Value(..))
 import qualified Data.HashMap.Strict as H
-import Data.Text (Text, isPrefixOf)
+import Data.Text (Text, isPrefixOf, pack)
 import qualified Network.Wreq as W
 
 -- local imports
@@ -84,16 +87,27 @@ authorise :: Channel -> PusherClient (Maybe Value)
 authorise (Channel channel) = do
   state <- ask
   let authURL = authorisationURL (options state)
+  let Key key = appKey state
   sockID <- readTVarIO (socketId state)
 
   case (authURL, sockID) of
-    (Just authURL', Just sockID') -> liftIO (authorise' authURL' sockID')
+    (Just authURL', Just sockID') -> do
+      authData <- liftIO (authorise' authURL' sockID')
+      pure $ case authData of
+        -- If authed, prepend the app key to the "auth" field.
+        Just val -> Just (val & ix "auth" %~ prepend (key ++ ":"))
+        _ -> Nothing
     _ -> pure Nothing
 
   where
+    -- attempt to authorise against the server.
     authorise' authURL sockID = ignoreAll Nothing $ do
       let params = W.defaults & W.param "channel_name" .~ [channel]
                               & W.param "socket_id"    .~ [sockID]
       r <- W.asValue =<< W.getWith params authURL
       let body = r ^. W.responseBody
       pure (Just body)
+
+    -- prepend a value to a JSON string.
+    prepend s (String str) = String (pack s <> str)
+    prepend _ val = val

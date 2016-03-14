@@ -49,6 +49,8 @@ instance MonadIO PusherClient where
 data ClientState = S
   { connection :: Connection
   -- ^ Network connection
+  , appKey :: Key
+  -- ^ The application key.
   , options :: Options
   -- ^ Connection options
   , idleTimer :: TVar (Maybe Int)
@@ -67,8 +69,8 @@ data ClientState = S
   }
 
 -- | State for a brand new connection.
-defaultClientState :: Connection -> Options -> IO ClientState
-defaultClientState conn opts = atomically $ do
+defaultClientState :: Connection -> Key -> Options -> IO ClientState
+defaultClientState conn key opts = atomically $ do
   defIdleTimer   <- newTVar Nothing
   defSocketId    <- newTVar Nothing
   defThreadStore <- newTVar S.empty
@@ -78,6 +80,7 @@ defaultClientState conn opts = atomically $ do
 
   pure S
     { connection       = conn
+    , appKey           = key
     , options          = opts
     , idleTimer        = defIdleTimer
     , socketId         = defSocketId
