@@ -51,12 +51,11 @@ import Data.Version (Version(..), showVersion)
 
 -- library imports
 import Control.Lens ((^?), ix)
-import Data.Aeson (Value(..), decode', decodeStrict')
+import Data.Aeson (Value(..), decode')
 import Data.Aeson.Lens (_Integral, _Object, _String, _Value)
 import Data.ByteString.Lazy (ByteString)
 import qualified Data.HashMap.Strict as H
 import Data.Text (Text)
-import Data.Text.Encoding (encodeUtf8)
 import Network.Socket (HostName, PortNumber)
 import Network.WebSockets (DataMessage(..), receiveDataMessage)
 import qualified Network.WebSockets as WS
@@ -182,11 +181,7 @@ defaultHandlers =
 -- | Block and wait for an event.
 awaitEvent :: PusherClient (Either ByteString Value)
 awaitEvent = P $ \s -> decode <$> receiveDataMessage (connection s) where
-  decode (Text bs) = maybe (Left bs) Right $ do
-    Object o <- decode' bs
-    String d <- H.lookup "data" o
-    data_    <- decodeStrict' (encodeUtf8 d)
-    pure (Object (H.adjust (const data_) "data" o))
+  decode (Text   bs) = maybe (Left bs) Right (decode' bs)
   decode (Binary bs) = Left bs
 
 -- | Launch all event handlers which are bound to the current event.

@@ -88,11 +88,10 @@ bindGeneric event channel handler = do
   where
     -- Before invoking the handler, have a stab at decoding the data
     -- field.
-    wrappedHandler ev@(Object o) =
-      let data_ = H.lookup "data" o >>= attemptDecode
-      in handler $ case data_ of
-           Just decoded -> Object (H.adjust (const decoded) "data" o)
-           Nothing -> ev
+    wrappedHandler ev@(Object o) = handler $
+      case H.lookup "data" o >>= attemptDecode of
+        Just decoded -> Object (H.adjust (const decoded) "data" o)
+        Nothing -> ev
     wrappedHandler ev = handler ev
 
     -- Attempt to interpret as stringified JSON.
