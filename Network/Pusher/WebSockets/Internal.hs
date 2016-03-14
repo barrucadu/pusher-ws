@@ -95,20 +95,35 @@ data Options = Options
   -- for private and presence channels. If not given, private and
   -- presence channels cannot be used. Defaults to @Nothing@.
 
-  , cluster :: String
+  , cluster :: Cluster
   -- ^ Allows connecting to a different cluster by setting up correct
   -- hostnames for the connection. This parameter is mandatory when
   -- the app is created in a different cluster to the default
-  -- us-east-1. Defaults to @"us-east-1"@.
+  -- us-east-1. Defaults to @MT1@.
   }
+  deriving (Eq, Read, Show)
+
+-- | Clusters correspond to geographical regions where apps can be
+-- assigned to.
+data Cluster
+  = MT1 -- ^ The us-east-1 cluster.
+  | EU  -- ^ The eu-west-1 cluster.
+  | AP1 -- ^ The ap-southeast-1 cluster.
+  deriving (Eq, Ord, Bounded, Enum, Read, Show)
 
 -- | See 'Options' field documentation for what is set here.
 defaultOptions :: Options
 defaultOptions = Options
   { encrypted = True
   , authorisationURL = Nothing
-  , cluster = "us-east-1"
+  , cluster = MT1
   }
+
+-- | The region name of a cluster.
+clusterName :: Cluster -> String
+clusterName MT1 = "us-east-1"
+clusterName EU  = "eu-west-1"
+clusterName AP1 = "ap-southeast-1"
 
 -------------------------------------------------------------------------------
 

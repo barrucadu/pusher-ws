@@ -4,9 +4,11 @@
 module Network.Pusher.WebSockets
   ( -- * Connection
     PusherClient
+  , pusherWithKey
   , Options(..)
   , defaultOptions
-  , pusherWithKey
+  , Cluster(..)
+  , clusterName
 
   -- * Channels
   , Channel
@@ -70,8 +72,8 @@ pusherWithKey key opts
   where
     host
       -- The primary cluster has a different domain to all the others
-      | cluster opts == "us-east-1" = "ws.pusherapp.com"
-      | otherwise = "ws-" ++ cluster opts ++ ".pusher.com"
+      | cluster opts == MT1 = "ws.pusherapp.com"
+      | otherwise = "ws-" ++ clusterName (cluster opts) ++ ".pusher.com"
 
     path = "/app/"
         ++ key
