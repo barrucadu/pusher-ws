@@ -1,5 +1,3 @@
-{-# LANGUAGE GADTs #-}
-
 module Network.Pusher.WebSockets.Internal where
 
 -- 'base' imports
@@ -150,11 +148,7 @@ clusterName AP1 = "ap-southeast-1"
 -------------------------------------------------------------------------------
 
 -- | Event handlers: event name -> channel name -> handler.
-data Handler where
-  Handler :: Maybe Text
-          -> Maybe Channel
-          -> (Value -> PusherClient ())
-          -> Handler
+data Handler = Handler (Maybe Text) (Maybe Channel) (Value -> PusherClient ())
 
 -- Cheats a bit.
 instance NFData Handler where
