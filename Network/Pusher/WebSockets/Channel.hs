@@ -31,20 +31,19 @@ subscribe :: Text -> PusherClient (Maybe Channel)
 subscribe channel = do
   data_ <- getSubscribeData
   case data_ of
-    Just authdata -> do
-      triggerEvent "pusher:subscribe" Nothing authdata
+    Just (Object authdata) -> do
+      let channelData = H.insert "channel" (String channel) authdata
+      triggerEvent "pusher:subscribe" Nothing (Object channelData)
       pure (Just handle)
-    Nothing -> pure Nothing
+    _ -> pure Nothing
 
   where
     getSubscribeData
       | "private-"  `isPrefixOf` channel = authorise handle
       | "presence-" `isPrefixOf` channel = authorise handle
-      | otherwise = pure (Just channelData)
+      | otherwise = pure (Just (Object H.empty))
 
     handle = Channel channel
-
-    channelData = Object (H.fromList [("channel", String channel)])
 
 -- | Unsubscribe from a channel.
 unsubscribe :: Channel -> PusherClient ()
