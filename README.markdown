@@ -18,10 +18,13 @@ Current features:
 
 Missing features:
 
-- Inactivity pinging
-- Reconnection
-- Connection state events
-- Pusher error handling
+- Inactivity pinging.
+- Reconnection.
+- Connection state events.
+- Pusher error handling.
+
+The documentation of the latest developmental version is
+[available online][docs].
 
 Example
 -------
@@ -55,3 +58,5 @@ Bug reports, pull requests, and comments are very welcome!
 
 Feel free to contact me on GitHub, through IRC (#haskell on freenode),
 or email (mike@barrucadu.co.uk).
+
+[docs]: https://barrucadu.github.io/pusher-ws
