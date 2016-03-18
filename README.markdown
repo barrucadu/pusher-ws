@@ -58,4 +58,4 @@ Bug reports, pull requests, and comments are very welcome!
 Feel free to contact me on GitHub, through IRC (#haskell on freenode),
 or email (mike@barrucadu.co.uk).
 
-[docs]: https://barrucadu.github.io/pusher-ws
+[docs]: https://docs.barrucadu.co.uk/pusher-ws
