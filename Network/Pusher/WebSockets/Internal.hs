@@ -2,53 +2,43 @@ module Network.Pusher.WebSockets.Internal where
 
 -- 'base' imports
 import Control.Concurrent (ThreadId)
-import Control.Exception (SomeException, catch)
+import Control.Exception (Exception, SomeException, catch)
 import Data.Maybe (fromMaybe)
 import Data.String (IsString(..))
 
 -- library imports
 import Control.Concurrent.STM (STM, TVar, atomically, newTVar, modifyTVar')
+import Control.Concurrent.STM.TQueue
 import qualified Control.Concurrent.STM as STM
 import Control.DeepSeq (NFData(..), force)
 import Control.Monad.IO.Class (MonadIO(..))
+import Control.Monad.Trans.Reader (ReaderT, runReaderT)
+import qualified Control.Monad.Trans.Reader as R
 import Data.Aeson (Value(..))
 import Data.Hashable (Hashable(..))
 import qualified Data.HashMap.Strict as H
 import qualified Data.Set as S
 import Data.Text (Text, unpack)
 import Network.Socket (HostName, PortNumber)
-import Network.WebSockets (Connection)
+import Network.WebSockets (ConnectionException)
 
 -------------------------------------------------------------------------------
 
--- | A value of type @PusherClient a@ is a computation with access to
--- a connection to Pusher which, when executed, may perform
--- Pusher-specific actions such as subscribing to channels and
--- receiving events, as well as arbitrary I/O.
-newtype PusherClient a = P { runClient :: ClientState -> IO a }
+-- | A convenience wrapper for 'Pusher' actions.
+type PusherClient = ReaderT Pusher IO
 
-instance Functor PusherClient where
-  fmap f (P a) = P (fmap f . a)
+-- | Run a 'PusherClient'.
+runPusherClient :: Pusher -> PusherClient a -> IO a
+runPusherClient = flip runReaderT
 
-instance Applicative PusherClient where
-  pure = P . const . pure
-
-  (P f) <*> (P a) = P $ \s -> f s <*> a s
-
-instance Monad PusherClient where
-  (P a) >>= f = P $ \s -> do
-    a' <- a s
-    runClient (f a') s
-
-instance MonadIO PusherClient where
-  liftIO = P . const
-
--------------------------------------------------------------------------------
-
--- | Private state for the client.
-data ClientState = S
-  { connection :: Connection
-  -- ^ Network connection
+-- | Pusher connection handle.
+--
+-- If this is used after disconnecting, nothing will happen. (todo:
+-- signal an error condition indicating a cause: we closed it, server
+-- closed it, could not connect)
+data Pusher = Pusher
+  { commandQueue :: TQueue PusherCommand
+  -- ^ Queue to send commands to the client thread.
   , appKey :: Key
   -- ^ The application key.
   , options :: Options
@@ -64,22 +54,36 @@ data ClientState = S
   -- ^ Event handlers.
   , nextBinding :: TVar Binding
   -- ^ Next free binding.
+  , allChannels :: TVar (S.Set Channel)
+  -- ^ All subscribed channels.
   , presenceChannels :: TVar (H.HashMap Channel (Value, H.HashMap Text Value))
   -- ^ Connected presence channels
   }
 
+-- | A command to the Pusher thread.
+data PusherCommand = SendMessage Value | Subscribe Value | Terminate
+  deriving (Eq, Read, Show)
+
+-- | An exception thrown to kill the client.
+data TerminatePusher = TerminatePusher
+  deriving (Eq, Ord, Enum, Bounded, Read, Show)
+
+instance Exception TerminatePusher
+
 -- | State for a brand new connection.
-defaultClientState :: Connection -> Key -> Options -> IO ClientState
-defaultClientState conn key opts = atomically $ do
+defaultPusher :: Key -> Options -> IO Pusher
+defaultPusher key opts = atomically $ do
+  defCommQueue   <- newTQueue
   defIdleTimer   <- newTVar Nothing
   defSocketId    <- newTVar Nothing
   defThreadStore <- newTVar S.empty
   defEHandlers   <- newTVar H.empty
   defBinding     <- newTVar (Binding 0)
+  defAChannels   <- newTVar S.empty
   defPChannels   <- newTVar H.empty
 
-  pure S
-    { connection       = conn
+  pure Pusher
+    { commandQueue     = defCommQueue
     , appKey           = key
     , options          = opts
     , idleTimer        = defIdleTimer
@@ -87,6 +91,7 @@ defaultClientState conn key opts = atomically $ do
     , threadStore      = defThreadStore
     , eventHandlers    = defEHandlers
     , nextBinding      = defBinding
+    , allChannels      = defAChannels
     , presenceChannels = defPChannels
     }
 
@@ -165,8 +170,8 @@ instance NFData Handler where
 --
 -- If this is used when unsubscribed from a channel, nothing will
 -- happen.
-newtype Channel = Channel Text
-  deriving Eq
+newtype Channel = Channel { unChannel :: Text }
+  deriving (Eq, Ord)
 
 instance NFData Channel where
   rnf (Channel c) = rnf c
@@ -183,8 +188,8 @@ instance Hashable Channel where
 -- used to unbind it.
 --
 -- If this is used after unbinding, nothing will happen.
-newtype Binding = Binding Int
-  deriving Eq
+newtype Binding = Binding { unBinding :: Int }
+  deriving (Eq, Ord)
 
 instance NFData Binding where
   rnf (Binding b) = rnf b
@@ -198,8 +203,8 @@ instance Hashable Binding where
 -------------------------------------------------------------------------------
 
 -- | Get the current state.
-ask :: PusherClient ClientState
-ask = P pure
+ask :: PusherClient Pusher
+ask = R.ask
 
 -- | Turn a @Maybe@ action into a @PusherClient@ action.
 liftMaybe :: Maybe (PusherClient ()) -> PusherClient ()
@@ -217,8 +222,20 @@ strictModifyTVarIO tvar = liftIO . atomically . strictModifyTVar tvar
 readTVarIO :: MonadIO m => TVar a -> m a
 readTVarIO = liftIO . STM.readTVarIO
 
+-------------------------------------------------------------------------------
+
 -- | Ignore all exceptions by supplying a default value.
 ignoreAll :: a -> IO a -> IO a
-ignoreAll fallback act = catchAll act (const (pure fallback)) where
-  catchAll :: IO a -> (SomeException -> IO a) -> IO a
-  catchAll = catch
+ignoreAll fallback act = catchAll act (const (pure fallback))
+
+-- | Run an action, starting again on connection exception.
+reconnecting :: IO a -> IO a
+reconnecting act = catchConnException act (const (reconnecting act))
+
+-- | Catch connection failure exceptions.
+catchConnException :: IO a -> (ConnectionException -> IO a) -> IO a
+catchConnException = catch
+
+-- | Catch all exceptions.
+catchAll :: IO a -> (SomeException -> IO a) -> IO a
+catchAll = catch

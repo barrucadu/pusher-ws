@@ -3,12 +3,17 @@
 
 module Network.Pusher.WebSockets
   ( -- * Connection
-    PusherClient
+    Pusher
   , Key(..)
   , Options(..)
   , Cluster(..)
   , pusherWithKey
   , defaultOptions
+  , disconnect
+
+  -- ** The @PusherClient@ Monad
+  , PusherClient
+  , runPusherClient
 
   -- * Channels
   , Channel
@@ -42,24 +47,26 @@ module Network.Pusher.WebSockets
 
 -- 'base' imports
 import Control.Arrow (second)
+import Control.Concurrent.MVar (newEmptyMVar, putMVar, takeMVar)
 import Control.Concurrent (ThreadId, forkIO, killThread, myThreadId)
-import Control.Exception (bracket_, finally)
+import Control.Exception (bracket_, throwIO)
 import Control.Monad (forever)
-import Data.Functor (void)
 import Data.Maybe (isNothing)
 import Data.Version (Version(..), showVersion)
 
 -- library imports
+import Control.Concurrent.STM (atomically, retry, readTQueue, readTVar, writeTQueue, writeTVar)
 import Control.Lens ((^?), ix)
 import Control.Monad.IO.Class (liftIO)
-import Data.Aeson (Value(..), decode')
+import Control.Monad.Trans.Reader (ReaderT(..))
+import Data.Aeson (Value(..), decode', encode)
 import Data.Aeson.Lens (_Integral, _Object, _String, _Value)
 import Data.ByteString.Lazy (ByteString)
 import qualified Data.HashMap.Strict as H
 import qualified Data.Set as S
 import Data.Text (Text)
 import Network.Socket (HostName, PortNumber)
-import Network.WebSockets (DataMessage(..), receiveDataMessage)
+import Network.WebSockets (runClient)
 import qualified Network.WebSockets as WS
 import Wuss (runSecureClient)
 
@@ -72,30 +79,96 @@ import Paths_pusher_ws (version)
 -------------------------------------------------------------------------------
 
 -- | Connect to Pusher.
---
--- Takes the application key and options, and runs a client. When the
--- client terminates, the connection is closed.
-pusherWithKey :: Key -> Options -> PusherClient a -> IO a
+pusherWithKey :: Key -> Options -> IO Pusher
 pusherWithKey key opts
-  | encrypted opts = runSecureClient host port path . run
-  | otherwise      = WS.runClient host (fromIntegral port) path . run
+  | encrypted opts = run (runSecureClient host port path)
+  | otherwise      = run (runClient host (fromIntegral port) path)
 
   where
     (host, port, path) = makeURL key opts
 
-    -- Set-up and tear-down
-    run client conn = do
-      state <- defaultClientState conn key opts
+    -- Run the client
+    run withConnection = do
+      state <- defaultPusher key opts
+      _ <- forkIO (pusherClient withConnection state)
+      pure state
 
-      let killLive = readTVarIO (threadStore state) >>= mapM_ killThread
-      finally (runClient (wrap client) state) killLive
+-- | Gracefully close the connection. The connection will remain open
+-- and events will continue to be processed until the server accepts
+-- the request.
+disconnect :: PusherClient ()
+disconnect = do
+  state <- ask
+  liftIO . atomically $ writeTQueue (commandQueue state) Terminate
 
-    -- Register default event handlers and fork off handling thread.
-    wrap client = do
-      mapM_ (\(e, h) -> bind e Nothing h) defaultHandlers
-      let go = forever (awaitEvent >>= handleEvent)
-      void (fork go)
-      client
+-- | Client thread: connect to Pusher and process commands,
+-- reconnecting automatically, until finally told to terminate.
+--
+-- Does not automatically fork.
+pusherClient :: ((WS.Connection -> IO ()) -> IO ()) -> Pusher -> IO ()
+pusherClient withConnection state = do
+  -- Bind default handlers
+  runPusherClient state $
+    mapM_ (\(e, h) -> bind e Nothing h) defaultHandlers
+
+  -- Run client
+  ignoreAll () . reconnecting $ withConnection client
+
+  -- Kill forked threads
+  readTVarIO (threadStore state) >>= mapM_ killThread
+
+  where
+    client conn = flip catchAll handleExc $ do
+      -- Fork off an event handling thread
+      allClosed <- newEmptyMVar
+      _ <- forkIO (handleThread conn allClosed)
+
+      -- Wait for the pusher:connection_established event.
+      timeout <- liftIO . atomically $
+        maybe retry pure =<< readTVar (idleTimer state)
+
+      -- This will do more pinging than necessary, but it's far
+      -- simpler than keeping track of the actual inactivity, and
+      -- ensures that enough pings are sent.
+      WS.forkPingThread conn timeout
+
+      -- Resubscribe to channels
+      channels <- liftIO . atomically $ do
+        writeTVar (presenceChannels state) H.empty
+        readTVar (allChannels state)
+      runPusherClient state $
+        mapM_ (subscribe . unChannel) channels
+
+      -- Handle commands
+      forever $ do
+        command <- atomically . readTQueue $ commandQueue state
+        case command of
+          SendMessage json -> sendJSON conn json
+          Subscribe channelData -> do
+            let json = Object $ H.fromList [ ("event", String "pusher:subscribe")
+                                           , ("data", channelData)
+                                           ]
+            sendJSON conn json
+          Terminate -> do
+            WS.sendClose conn ("goodbye" :: Text)
+            takeMVar allClosed
+            throwIO TerminatePusher
+
+    -- Receive and handle events until the connection is closed.
+    handleThread conn allClosed = do
+      ignoreAll () . forever $
+        awaitEvent conn >>= handleEvent state
+      putMVar allClosed ()
+
+    -- Send some JSON down the channel
+    sendJSON conn = WS.sendDataMessage conn . WS.Text . encode
+
+    -- Mark the connection as closed by clearing the idle timer and
+    -- socket ID, then rethrow the exception.
+    handleExc e = do
+      strictModifyTVarIO (idleTimer state) (const Nothing)
+      strictModifyTVarIO (socketId  state) (const Nothing)
+      throwIO e
 
 -- | The hostname, port, and path (including querystring) to connect
 -- to.
@@ -152,10 +225,6 @@ defaultHandlers =
         state <- ask
         strictModifyTVarIO (idleTimer state) (const (Just timeout))
         strictModifyTVarIO (socketId  state) (const (Just socketid))
-        -- This will do more pinging than necessary, but it's far
-        -- simpler than keeping track of the actual inactivity, and
-        -- ensures that enough pings are sent.
-        liftIO $ WS.forkPingThread (connection state) timeout
 
     -- Save the list of users
     addPresenceChannel event = liftMaybe $ do
@@ -185,29 +254,28 @@ defaultHandlers =
       strictModifyTVarIO (presenceChannels state) (H.adjust (second f) channel)
 
 -- | Block and wait for an event.
-awaitEvent :: PusherClient (Either ByteString Value)
-awaitEvent = P (fmap decode . receiveDataMessage . connection) where
-  decode (Text   bs) = maybe (Left bs) Right (decode' bs)
-  decode (Binary bs) = Left bs
+awaitEvent :: WS.Connection -> IO (Either ByteString Value)
+awaitEvent conn = decode <$> WS.receiveDataMessage conn where
+  decode (WS.Text   bs) = maybe (Left bs) Right (decode' bs)
+  decode (WS.Binary bs) = Left bs
 
 -- | Launch all event handlers which are bound to the current event.
-handleEvent :: Either ByteString Value -> PusherClient ()
-handleEvent (Right event) = do
-  state <- ask
-
+handleEvent :: Pusher -> Either ByteString Value -> IO ()
+handleEvent state (Right event) = do
   let match (Handler e c _) = (isNothing e || e == Just (eventType event)) &&
                               (isNothing c || c == eventChannel event)
 
   handlers <- filter match . H.elems <$> readTVarIO (eventHandlers state)
-  mapM_ (fork . (\(Handler _ _ h) -> h event)) handlers
+  runPusherClient state $
+    mapM_ (fork . (\(Handler _ _ h) -> h event)) handlers
 -- Discard events which couldn't be decoded.
-handleEvent _ = pure ()
+handleEvent _ _ = pure ()
 
 -------------------------------------------------------------------------------
 
 -- | Fork a thread which will be killed when the connection is closed.
 fork :: PusherClient () -> PusherClient ThreadId
-fork (P action) = P (forkIO . run) where
+fork (ReaderT action) = ReaderT (forkIO . run) where
   run s = bracket_ setup teardown (action s) where
     -- Add the thread ID to the list
     setup = do

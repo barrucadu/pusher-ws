@@ -15,10 +15,10 @@ Current features:
 - Unbinding event handlers
 - Sending client events.
 - Threads which automatically get cleaned up on connection close.
+- Automatic reconnection (and channel resubscription).
 
 Missing features:
 
-- Reconnection.
 - Connection state events.
 - Pusher error handling.
 
@@ -36,8 +36,10 @@ let key = "your-key"
 let channels = ["your", "channels"]
 
 -- Connect to Pusher with your key, SSL, and the us-east-1 region.
-pusherWithKey key defaultOptions $ do
+pusher <- pusherWithKey key defaultOptions
 
+-- Run some actions with this connection:
+runPusherClient pusher $ do
   -- Subscribe to all the channels
   mapM_ subscribe channels
 
@@ -45,9 +47,9 @@ pusherWithKey key defaultOptions $ do
   -- the received JSON.
   bindAll Nothing (liftIO . print)
 
-  -- Loop forever, as the connection is closed when this action
-  -- terminates.
-  forever (liftIO yield)
+  -- Wait for user input and then close the connection.
+  liftIO (void getLine)
+  disconnect
 ```
 
 Contributing

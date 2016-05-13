@@ -9,13 +9,15 @@ module Network.Pusher.WebSockets.Channel
   ) where
 
 -- 'base' imports
+import Control.Concurrent.STM (atomically, writeTQueue)
 import Data.Monoid ((<>))
 
 -- library imports
-import Control.Lens ((&), (.~), (%~), ix)
+import Control.Lens ((&), (%~), ix)
 import Control.Monad.IO.Class (MonadIO(..))
 import Data.Aeson (Value(..), decode)
 import qualified Data.HashMap.Strict as H
+import qualified Data.Set as S
 import Data.Text (Text, isPrefixOf, pack)
 import Data.Text.Encoding (encodeUtf8)
 import qualified Network.HTTP.Conduit as W
@@ -33,11 +35,17 @@ import Network.Pusher.WebSockets.Internal
 -- If authorisation fails, this returns @Nothing@.
 subscribe :: Text -> PusherClient (Maybe Channel)
 subscribe channel = do
+  state <- ask
   data_ <- getSubscribeData
   case data_ of
-    Just val -> do
-      let channelData = val & ix "channel" .~ String channel
-      triggerEvent "pusher:subscribe" Nothing channelData
+    Just (Object o) -> liftIO . atomically $ do
+      -- Record the subscription
+      strictModifyTVar (allChannels state) (S.insert handle)
+
+      -- Send the subscribe message
+      let channelData = Object (H.insert "channel" (String channel) o)
+      writeTQueue (commandQueue state) (Subscribe channelData)
+
       pure (Just handle)
     _ -> pure Nothing
 

@@ -18,15 +18,14 @@ module Network.Pusher.WebSockets.Event
 import Data.Maybe (fromMaybe)
 
 -- library imports
-import Control.Concurrent.STM (atomically, readTVar)
+import Control.Concurrent.STM (atomically, readTVar, writeTQueue)
 import Control.Lens ((^?), (.~), (&), ix)
 import Control.Monad.IO.Class (liftIO)
-import Data.Aeson (Value(..), decodeStrict', encode)
+import Data.Aeson (Value(..), decodeStrict')
 import Data.Aeson.Lens (_String)
 import qualified Data.HashMap.Strict as H
 import Data.Text (Text)
 import Data.Text.Encoding (encodeUtf8)
-import Network.WebSockets (DataMessage(Text), sendDataMessage)
 
 -- local imports
 import Network.Pusher.WebSockets.Internal
@@ -108,16 +107,14 @@ unbind binding = do
 
 -- | Send an event with some JSON data.
 triggerEvent :: Text -> Maybe Channel -> Value -> PusherClient ()
-triggerEvent event channel data_ = sendJSON msg where
-  msg = Object . H.fromList $ concat
-    [ [("event",   String event)]
-    , [("channel", String chan) | Just (Channel chan) <- [channel]]
-    , [("data",    data_)]
-    ]
-
--- | Send some JSON down the socket.
-sendJSON :: Value -> PusherClient ()
-sendJSON data_ = do
+triggerEvent event channel data_ = do
   state <- ask
-  let message = Text (encode data_)
-  liftIO (sendDataMessage (connection state) message)
+  liftIO . atomically $
+    writeTQueue (commandQueue state) (SendMessage json)
+
+  where
+    json = Object . H.fromList $ concat
+      [ [("event",   String event)]
+      , [("channel", String chan) | Just (Channel chan) <- [channel]]
+      , [("data",    data_)]
+      ]
