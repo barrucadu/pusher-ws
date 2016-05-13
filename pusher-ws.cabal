@@ -29,6 +29,7 @@ library
                      , containers
                      , deepseq
                      , hashable
+                     , http-conduit
                      , lens
                      , lens-aeson
                      , network
@@ -38,7 +39,6 @@ library
                      , transformers
                      , unordered-containers
                      , websockets
-                     , wreq
                      , wuss
   -- hs-source-dirs:      
   default-language:    Haskell2010

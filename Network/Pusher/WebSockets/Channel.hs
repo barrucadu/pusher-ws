@@ -12,12 +12,13 @@ module Network.Pusher.WebSockets.Channel
 import Data.Monoid ((<>))
 
 -- library imports
-import Control.Lens ((^.), (&), (.~), (%~), ix)
+import Control.Lens ((&), (.~), (%~), ix)
 import Control.Monad.IO.Class (MonadIO(..))
-import Data.Aeson (Value(..))
+import Data.Aeson (Value(..), decode)
 import qualified Data.HashMap.Strict as H
 import Data.Text (Text, isPrefixOf, pack)
-import qualified Network.Wreq as W
+import Data.Text.Encoding (encodeUtf8)
+import qualified Network.HTTP.Conduit as W
 
 -- local imports
 import Network.Pusher.WebSockets.Event
@@ -102,11 +103,14 @@ authorise (Channel channel) = do
   where
     -- attempt to authorise against the server.
     authorise' authURL sockID = ignoreAll Nothing $ do
-      let params = W.defaults & W.param "channel_name" .~ [channel]
-                              & W.param "socket_id"    .~ [sockID]
-      r <- W.asValue =<< W.getWith params authURL
-      let body = r ^. W.responseBody
-      pure (Just body)
+      man <- W.newManager W.tlsManagerSettings
+      req <- W.parseUrl authURL
+      let req' = W.setQueryString
+                   [ ("channel_name", Just (encodeUtf8 channel))
+                   , ("socket_id",    Just (encodeUtf8 sockID))
+                   ] req
+      resp <- W.httpLbs req' man
+      pure . decode $ W.responseBody resp
 
     -- prepend a value to a JSON string.
     prepend s (String str) = String (pack s <> str)
