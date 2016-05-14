@@ -61,8 +61,8 @@ data Pusher = Pusher
   }
 
 -- | A command to the Pusher thread.
-data PusherCommand = SendMessage Value | Subscribe Value | Terminate
-  deriving (Eq, Read, Show)
+data PusherCommand = SendMessage Value | Subscribe Channel Value | Terminate
+  deriving (Eq, Show)
 
 -- | An exception thrown to kill the client.
 data TerminatePusher = TerminatePusher

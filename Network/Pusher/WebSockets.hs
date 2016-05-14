@@ -144,11 +144,12 @@ pusherClient withConnection state = do
         command <- atomically . readTQueue $ commandQueue state
         case command of
           SendMessage json -> sendJSON conn json
-          Subscribe channelData -> do
+          Subscribe handle channelData -> do
             let json = Object $ H.fromList [ ("event", String "pusher:subscribe")
                                            , ("data", channelData)
                                            ]
             sendJSON conn json
+            strictModifyTVarIO (allChannels state) (S.insert handle)
           Terminate -> do
             WS.sendClose conn ("goodbye" :: Text)
             takeMVar allClosed
