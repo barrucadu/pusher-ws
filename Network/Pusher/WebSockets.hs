@@ -2,18 +2,22 @@
 {-# OPTIONS -fno-warn-warnings-deprecations #-}
 
 module Network.Pusher.WebSockets
-  ( -- * Connection
+  ( -- * Initialisation
     Pusher
   , Key(..)
   , Options(..)
   , Cluster(..)
   , pusherWithKey
   , defaultOptions
-  , disconnect
 
   -- ** The @PusherClient@ Monad
   , PusherClient
   , runPusherClient
+
+  -- ** Connection
+  , ConnectionState(..)
+  , connectionState
+  , disconnect
 
   -- * Channels
   , Channel
@@ -48,14 +52,14 @@ module Network.Pusher.WebSockets
 -- 'base' imports
 import Control.Arrow (second)
 import Control.Concurrent.MVar (newEmptyMVar, putMVar, takeMVar)
-import Control.Concurrent (ThreadId, forkIO, killThread, myThreadId)
+import Control.Concurrent (ThreadId, forkIO, killThread, myThreadId, threadDelay)
 import Control.Exception (bracket_, throwIO)
 import Control.Monad (forever)
 import Data.Maybe (isNothing)
 import Data.Version (Version(..), showVersion)
 
 -- library imports
-import Control.Concurrent.STM (atomically, retry, readTQueue, readTVar, writeTQueue, writeTVar)
+import Control.Concurrent.STM (atomically, retry, newTVarIO, tryReadTQueue, readTVar, writeTQueue, writeTVar)
 import Control.Lens ((&), (^?), (.~), ix)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Reader (ReaderT(..))
@@ -64,7 +68,7 @@ import Data.Aeson.Lens (_Integral, _Object, _String, _Value)
 import Data.ByteString.Lazy (ByteString)
 import qualified Data.HashMap.Strict as H
 import qualified Data.Set as S
-import Data.Text (Text)
+import Data.Text (Text, pack)
 import Network.Socket (HostName, PortNumber)
 import Network.WebSockets (runClient)
 import qualified Network.WebSockets as WS
@@ -112,7 +116,10 @@ pusherClient withConnection state = do
     mapM_ (\(e, h) -> bind e Nothing h) defaultHandlers
 
   -- Run client
-  ignoreAll () . reconnecting $ withConnection client
+  ignoreAll () $ reconnecting
+    (changeConnectionState Connecting >> withConnection client)
+    (changeConnectionState Unavailable >> threadDelay (1 * 1000 * 1000))
+  changeConnectionState Disconnected
 
   -- Kill forked threads
   readTVarIO (threadStore state) >>= mapM_ killThread
@@ -126,11 +133,13 @@ pusherClient withConnection state = do
       -- Wait for the pusher:connection_established event.
       timeout <- liftIO . atomically $
         maybe retry pure =<< readTVar (idleTimer state)
+      changeConnectionState Connected
 
       -- This will do more pinging than necessary, but it's far
       -- simpler than keeping track of the actual inactivity, and
       -- ensures that enough pings are sent.
-      WS.forkPingThread conn timeout
+      closevar <- newTVarIO False
+      _ <- forkIO (pingThread conn timeout closevar)
 
       -- Resubscribe to channels
       channels <- liftIO . atomically $ do
@@ -141,20 +150,34 @@ pusherClient withConnection state = do
 
       -- Handle commands
       forever $ do
-        command <- atomically . readTQueue $ commandQueue state
+        command <- atomically $ do
+          cmd  <- tryReadTQueue (commandQueue state)
+          kill <- readTVar closevar
+          case (cmd, kill) of
+            (Just cmd', _)   -> pure (Just cmd')
+            (Nothing, True)  -> pure Nothing
+            (Nothing, False) -> retry
+
         case command of
-          SendMessage json -> sendJSON conn json
-          SendLocalMessage json -> handleEvent state (Right json)
-          Subscribe handle channelData -> do
+          Just (SendMessage json) ->
+            sendJSON conn json
+
+          Just (SendLocalMessage json) ->
+            handleEvent state (Right json)
+
+          Just (Subscribe handle channelData) -> do
             let json = Object $ H.fromList [ ("event", String "pusher:subscribe")
                                            , ("data", channelData)
                                            ]
             sendJSON conn json
             strictModifyTVarIO (allChannels state) (S.insert handle)
-          Terminate -> do
+
+          Just Terminate -> do
             WS.sendClose conn ("goodbye" :: Text)
             takeMVar allClosed
             throwIO TerminatePusher
+
+          Nothing -> throwIO WS.ConnectionClosed
 
     -- Receive and handle events until the connection is closed.
     handleThread conn allClosed = do
@@ -162,15 +185,41 @@ pusherClient withConnection state = do
         awaitEvent conn >>= handleEvent state
       putMVar allClosed ()
 
+    -- Send a ping every time the timeout elapses, if the connection
+    -- closes write 'True' to the provided 'TVar'.
+    pingThread conn timeout closevar = do
+      let pinger i = do
+            threadDelay (timeout * 1000 * 1000)
+            WS.sendPing conn (pack $ show i)
+            pinger (i + 1)
+      ignoreAll () (pinger (0 :: Integer))
+      atomically (writeTVar closevar True)
+
     -- Send some JSON down the channel
     sendJSON conn = WS.sendDataMessage conn . WS.Text . encode
 
     -- Mark the connection as closed by clearing the idle timer and
-    -- socket ID, then rethrow the exception.
+    -- socket ID, send the "unavailable" connection event if this
+    -- disconnection wasn't requested, then rethrow the exception.
     handleExc e = do
       strictModifyTVarIO (idleTimer state) (const Nothing)
       strictModifyTVarIO (socketId  state) (const Nothing)
       throwIO e
+
+    -- Set the connection state and send a state change event if
+    -- necessary.
+    changeConnectionState s = do
+      ev <- atomically $ do
+        oldState <- readTVar (connState state)
+        writeTVar (connState state) s
+        pure $ (Object . H.singleton "event" . String) <$>
+          case (oldState == s, s) of
+            (False, Connecting)   -> Just "connecting"
+            (False, Connected)    -> Just "connected"
+            (False, Unavailable)  -> Just "unavailable"
+            (False, Disconnected) -> Just "disconnected"
+            _ -> Nothing
+      maybe (pure ()) (handleEvent state . Right) ev
 
 -- | The hostname, port, and path (including querystring) to connect
 -- to.
@@ -306,3 +355,7 @@ fork (ReaderT action) = ReaderT (forkIO . run) where
     teardown = do
       tid <- myThreadId
       strictModifyTVarIO (threadStore s) (S.delete tid)
+
+-- | Get the connection state.
+connectionState :: PusherClient ConnectionState
+connectionState = readTVarIO . connState =<< ask

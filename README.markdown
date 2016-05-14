@@ -16,10 +16,11 @@ Current features:
 - Sending client events.
 - Threads which automatically get cleaned up on connection close.
 - Automatic reconnection (and channel resubscription).
+- Connection state events.
 
 Missing features:
 
-- Connection state events.
+- "connecting_in" events.
 - Pusher error handling.
 
 The documentation of the latest developmental version is

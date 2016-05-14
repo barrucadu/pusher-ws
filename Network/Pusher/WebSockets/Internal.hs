@@ -1,8 +1,10 @@
+{-# LANGUAGE ScopedTypeVariables #-}
 module Network.Pusher.WebSockets.Internal where
 
 -- 'base' imports
 import Control.Concurrent (ThreadId)
-import Control.Exception (Exception, SomeException, catch)
+import Control.Exception (IOException, Exception, SomeException, catch, toException)
+import qualified Control.Exception as E
 import Data.String (IsString(..))
 
 -- library imports
@@ -19,7 +21,7 @@ import qualified Data.HashMap.Strict as H
 import qualified Data.Set as S
 import Data.Text (Text, unpack)
 import Network.Socket (HostName, PortNumber)
-import Network.WebSockets (ConnectionException)
+import Network.WebSockets (ConnectionException, HandshakeException)
 
 -------------------------------------------------------------------------------
 
@@ -38,6 +40,8 @@ runPusherClient = flip runReaderT
 data Pusher = Pusher
   { commandQueue :: TQueue PusherCommand
   -- ^ Queue to send commands to the client thread.
+  , connState :: TVar ConnectionState
+  -- ^ The state of the connection.
   , appKey :: Key
   -- ^ The application key.
   , options :: Options
@@ -78,10 +82,33 @@ data TerminatePusher = TerminatePusher
 
 instance Exception TerminatePusher
 
+-- | The state of the connection. Events are sent when the state is
+-- changed.
+data ConnectionState
+  = Initialized
+  -- ^ Initial state. No event is emitted.
+  | Connecting
+  -- ^ Trying to connect. This state will also be entered when trying
+  -- to reconnect after a connection failure. Emits the @"connecting"@
+  -- event.
+  | Connected
+  -- ^ The connection is established and authenticated with your
+  -- app. Emits the @"connected"@ event.
+  | Unavailable
+  -- ^ The connection is temporarily unavailable. The network
+  -- connection is down, the server is down, or something is blocking
+  -- the connection. Emits the @"unavailable"@ event and then enters
+  -- the @Connecting@ state again.
+  | Disconnected
+  -- ^ The connection has been intentionally closed. Emits the
+  -- @"disconnected"@ event and then kills all forked threads.
+  deriving (Eq, Ord, Enum, Bounded, Read, Show)
+
 -- | State for a brand new connection.
 defaultPusher :: Key -> Options -> IO Pusher
 defaultPusher key opts = atomically $ do
   defCommQueue   <- newTQueue
+  defConnState   <- newTVar Initialized
   defIdleTimer   <- newTVar Nothing
   defSocketId    <- newTVar Nothing
   defThreadStore <- newTVar S.empty
@@ -92,6 +119,7 @@ defaultPusher key opts = atomically $ do
 
   pure Pusher
     { commandQueue     = defCommQueue
+    , connState        = defConnState
     , appKey           = key
     , options          = opts
     , idleTimer        = defIdleTimer
@@ -232,13 +260,19 @@ readTVarIO = liftIO . STM.readTVarIO
 ignoreAll :: a -> IO a -> IO a
 ignoreAll fallback act = catchAll act (const (pure fallback))
 
--- | Run an action, starting again on connection exception.
-reconnecting :: IO a -> IO a
-reconnecting act = catchConnException act (const (reconnecting act))
+-- | Run an action, starting again on connection and handshake
+-- exception.
+reconnecting :: IO a -> IO () -> IO a
+reconnecting act prere = loop where
+  loop = catchNetException act (const (prere >> loop))
 
--- | Catch connection failure exceptions.
-catchConnException :: IO a -> (ConnectionException -> IO a) -> IO a
-catchConnException = catch
+-- | Catch all network exceptions.
+catchNetException :: forall a. IO a -> (SomeException -> IO a) -> IO a
+catchNetException act handler = E.catches act handlers where
+  handlers = [ E.Handler (handler . toException :: IOException -> IO a)
+             , E.Handler (handler . toException :: HandshakeException -> IO a)
+             , E.Handler (handler . toException :: ConnectionException -> IO a)
+             ]
 
 -- | Catch all exceptions.
 catchAll :: IO a -> (SomeException -> IO a) -> IO a
