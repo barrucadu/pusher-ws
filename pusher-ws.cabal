@@ -36,6 +36,7 @@ library
                      , scientific
                      , stm
                      , text
+                     , time
                      , transformers
                      , unordered-containers
                      , websockets

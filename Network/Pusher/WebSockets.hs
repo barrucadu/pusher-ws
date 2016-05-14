@@ -54,12 +54,12 @@ import Control.Arrow (second)
 import Control.Concurrent.MVar (newEmptyMVar, putMVar, takeMVar)
 import Control.Concurrent (ThreadId, forkIO, killThread, myThreadId, threadDelay)
 import Control.Exception (bracket_, throwIO)
-import Control.Monad (forever)
+import Control.Monad (forever, unless)
 import Data.Maybe (isNothing)
 import Data.Version (Version(..), showVersion)
 
 -- library imports
-import Control.Concurrent.STM (atomically, retry, newTVarIO, tryReadTQueue, readTVar, writeTQueue, writeTVar)
+import Control.Concurrent.STM (TVar, atomically, retry, newTVarIO, tryReadTQueue, readTVar, writeTVar)
 import Control.Lens ((&), (^?), (.~), ix)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Reader (ReaderT(..))
@@ -69,10 +69,11 @@ import Data.ByteString.Lazy (ByteString)
 import qualified Data.HashMap.Strict as H
 import qualified Data.Set as S
 import Data.Text (Text, pack)
+import Data.Time.Clock (UTCTime, getCurrentTime, diffUTCTime)
 import Network.Socket (HostName, PortNumber)
-import Network.WebSockets (runClient)
+import Network.WebSockets (runClientWith)
 import qualified Network.WebSockets as WS
-import Wuss (runSecureClient)
+import Wuss (runSecureClientWith)
 
 -- local imports
 import Network.Pusher.WebSockets.Channel
@@ -85,15 +86,20 @@ import Paths_pusher_ws (version)
 -- | Connect to Pusher.
 pusherWithKey :: Key -> Options -> IO Pusher
 pusherWithKey key opts
-  | encrypted opts = run (runSecureClient host port path)
-  | otherwise      = run (runClient host (fromIntegral port) path)
+  | encrypted opts = run (runSecureClientWith host port path)
+  | otherwise      = run (runClientWith host (fromIntegral port) path)
 
   where
     (host, port, path) = makeURL key opts
 
     -- Run the client
-    run withConnection = do
+    run withConn = do
       state <- defaultPusher key opts
+
+      let connOpts = WS.defaultConnectionOptions
+            { WS.connectionOnPong = atomically . writeTVar (lastReceived state) =<< getCurrentTime }
+      let withConnection = withConn connOpts []
+
       _ <- forkIO (pusherClient withConnection state)
       pure state
 
@@ -128,7 +134,7 @@ pusherClient withConnection state = do
     client conn = flip catchAll handleExc $ do
       -- Fork off an event handling thread
       allClosed <- newEmptyMVar
-      _ <- forkIO (handleThread conn allClosed)
+      _ <- forkIO (handleThread conn (lastReceived state) allClosed)
 
       -- Wait for the pusher:connection_established event.
       timeout <- liftIO . atomically $
@@ -180,20 +186,29 @@ pusherClient withConnection state = do
           Nothing -> throwIO WS.ConnectionClosed
 
     -- Receive and handle events until the connection is closed.
-    handleThread conn allClosed = do
+    handleThread conn lastMsgTime allClosed = do
       ignoreAll () . forever $
-        awaitEvent conn >>= handleEvent state
+        awaitEvent conn lastMsgTime >>= handleEvent state
       putMVar allClosed ()
 
     -- Send a ping every time the timeout elapses, if the connection
     -- closes write 'True' to the provided 'TVar'.
-    pingThread conn timeout closevar = do
-      let pinger i = do
-            threadDelay (timeout * 1000 * 1000)
-            WS.sendPing conn (pack $ show i)
-            pinger (i + 1)
-      ignoreAll () (pinger (0 :: Integer))
-      atomically (writeTVar closevar True)
+    pingThread conn timeout closevar = pinger 0 where
+      pinger :: Integer -> IO ()
+      pinger i = do
+        -- Wait for the timeout to elapse
+        threadDelay (timeout * 1000 * 1000)
+        -- Send a ping
+        WS.sendPing conn (pack $ show i)
+        -- Check the time of receipt of the last message: if it's
+        -- longer ago than the timeout (+ some small delay to handle
+        -- network delays) signal disconnection. Otherwise loop.
+        now     <- getCurrentTime
+        lastMsg <- readTVarIO (lastReceived state)
+        let fuzz = 30
+        if now `diffUTCTime` lastMsg > fromIntegral timeout + fuzz
+        then atomically (writeTVar closevar True)
+        else pinger (i + 1)
 
     -- Send some JSON down the channel
     sendJSON conn = WS.sendDataMessage conn . WS.Text . encode
@@ -323,10 +338,13 @@ defaultHandlers =
       liftIO $ handleEvent state (Right json)
 
 -- | Block and wait for an event.
-awaitEvent :: WS.Connection -> IO (Either ByteString Value)
-awaitEvent conn = decode <$> WS.receiveDataMessage conn where
-  decode (WS.Text   bs) = maybe (Left bs) Right (decode' bs)
-  decode (WS.Binary bs) = Left bs
+awaitEvent :: WS.Connection -> TVar UTCTime -> IO (Either ByteString Value)
+awaitEvent conn lastMsgTime = do
+  msg <- WS.receiveDataMessage conn
+  atomically . writeTVar lastMsgTime =<< getCurrentTime
+  pure $ case msg of
+    WS.Text   bs -> maybe (Left bs) Right (decode' bs)
+    WS.Binary bs -> Left bs
 
 -- | Launch all event handlers which are bound to the current event.
 handleEvent :: Pusher -> Either ByteString Value -> IO ()

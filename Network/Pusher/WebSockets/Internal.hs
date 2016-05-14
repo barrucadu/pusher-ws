@@ -20,6 +20,7 @@ import Data.Hashable (Hashable(..))
 import qualified Data.HashMap.Strict as H
 import qualified Data.Set as S
 import Data.Text (Text, unpack)
+import Data.Time.Clock (UTCTime, getCurrentTime)
 import Network.Socket (HostName, PortNumber)
 import Network.WebSockets (ConnectionException, HandshakeException)
 
@@ -49,6 +50,8 @@ data Pusher = Pusher
   , idleTimer :: TVar (Maybe Int)
   -- ^ Inactivity timeout before a ping should be sent. Set by Pusher
   -- on connect.
+  , lastReceived :: TVar UTCTime
+  -- ^ Time of receipt of last message.
   , socketId :: TVar (Maybe Text)
   -- ^ Identifier of the socket. Set by Pusher on connect.
   , threadStore :: TVar (S.Set ThreadId)
@@ -106,30 +109,34 @@ data ConnectionState
 
 -- | State for a brand new connection.
 defaultPusher :: Key -> Options -> IO Pusher
-defaultPusher key opts = atomically $ do
-  defCommQueue   <- newTQueue
-  defConnState   <- newTVar Initialized
-  defIdleTimer   <- newTVar Nothing
-  defSocketId    <- newTVar Nothing
-  defThreadStore <- newTVar S.empty
-  defEHandlers   <- newTVar H.empty
-  defBinding     <- newTVar (Binding 0)
-  defAChannels   <- newTVar S.empty
-  defPChannels   <- newTVar H.empty
+defaultPusher key opts = do
+  now <- getCurrentTime
+  atomically $ do
+    defCommQueue    <- newTQueue
+    defConnState    <- newTVar Initialized
+    defIdleTimer    <- newTVar Nothing
+    defLastReceived <- newTVar now
+    defSocketId     <- newTVar Nothing
+    defThreadStore  <- newTVar S.empty
+    defEHandlers    <- newTVar H.empty
+    defBinding      <- newTVar (Binding 0)
+    defAChannels    <- newTVar S.empty
+    defPChannels    <- newTVar H.empty
 
-  pure Pusher
-    { commandQueue     = defCommQueue
-    , connState        = defConnState
-    , appKey           = key
-    , options          = opts
-    , idleTimer        = defIdleTimer
-    , socketId         = defSocketId
-    , threadStore      = defThreadStore
-    , eventHandlers    = defEHandlers
-    , nextBinding      = defBinding
-    , allChannels      = defAChannels
-    , presenceChannels = defPChannels
-    }
+    pure Pusher
+      { commandQueue     = defCommQueue
+      , connState        = defConnState
+      , appKey           = key
+      , options          = opts
+      , idleTimer        = defIdleTimer
+      , lastReceived     = defLastReceived
+      , socketId         = defSocketId
+      , threadStore      = defThreadStore
+      , eventHandlers    = defEHandlers
+      , nextBinding      = defBinding
+      , allChannels      = defAChannels
+      , presenceChannels = defPChannels
+      }
 
 -------------------------------------------------------------------------------
 
