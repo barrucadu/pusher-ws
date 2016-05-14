@@ -5,6 +5,7 @@ module Network.Pusher.WebSockets.Internal where
 import Control.Concurrent (ThreadId)
 import Control.Exception (IOException, Exception, SomeException, catch, toException)
 import qualified Control.Exception as E
+import Control.Monad (when)
 import Data.String (IsString(..))
 
 -- library imports
@@ -35,9 +36,7 @@ runPusherClient = flip runReaderT
 
 -- | Pusher connection handle.
 --
--- If this is used after disconnecting, nothing will happen. (todo:
--- signal an error condition indicating a cause: we closed it, server
--- closed it, could not connect)
+-- If this is used after disconnecting, an exception will be thrown.
 data Pusher = Pusher
   { commandQueue :: TQueue PusherCommand
   -- ^ Queue to send commands to the client thread.
@@ -84,6 +83,13 @@ data TerminatePusher = TerminatePusher
   deriving (Eq, Ord, Enum, Bounded, Read, Show)
 
 instance Exception TerminatePusher
+
+-- | Thrown if a 'Pusher' value is used after the connection has been
+-- closed.
+data PusherClosed = PusherClosed
+  deriving (Eq, Ord, Enum, Bounded, Read, Show)
+
+instance Exception PusherClosed
 
 -- | The state of the connection. Events are sent when the state is
 -- changed.
@@ -137,6 +143,15 @@ defaultPusher key opts = do
       , allChannels      = defAChannels
       , presenceChannels = defPChannels
       }
+
+-- | Send a command to the queue. Throw a 'PusherClosed' exception if
+-- the connection has been disconnected.
+sendCommand :: Pusher -> PusherCommand -> IO ()
+sendCommand state cmd = do
+  cstate <- readTVarIO (connState state)
+  when (cstate == Disconnected) $
+    E.throwIO PusherClosed
+  atomically (writeTQueue (commandQueue state) cmd)
 
 -------------------------------------------------------------------------------
 

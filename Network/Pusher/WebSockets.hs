@@ -2,19 +2,19 @@
 {-# OPTIONS -fno-warn-warnings-deprecations #-}
 
 module Network.Pusher.WebSockets
-  ( -- * Initialisation
-    Pusher
+  ( Pusher
+  , PusherClosed(..)
   , Key(..)
   , Options(..)
   , Cluster(..)
   , pusherWithKey
   , defaultOptions
 
-  -- ** The @PusherClient@ Monad
+  -- * The @PusherClient@ Monad
   , PusherClient
   , runPusherClient
 
-  -- ** Connection
+  -- * Connection
   , ConnectionState(..)
   , connectionState
   , disconnect
@@ -109,7 +109,7 @@ pusherWithKey key opts
 disconnect :: PusherClient ()
 disconnect = do
   state <- ask
-  liftIO . atomically $ writeTQueue (commandQueue state) Terminate
+  liftIO (sendCommand state Terminate)
 
 -- | Client thread: connect to Pusher and process commands,
 -- reconnecting automatically, until finally told to terminate.

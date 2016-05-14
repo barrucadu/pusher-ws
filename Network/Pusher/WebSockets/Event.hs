@@ -19,7 +19,7 @@ module Network.Pusher.WebSockets.Event
 import Data.Maybe (fromMaybe)
 
 -- library imports
-import Control.Concurrent.STM (atomically, readTVar, writeTQueue)
+import Control.Concurrent.STM (atomically, readTVar)
 import Control.Lens ((^?), (.~), (&), ix)
 import Control.Monad.IO.Class (liftIO)
 import Data.Aeson (Value(..), decodeStrict')
@@ -121,8 +121,7 @@ sendMessage :: (Value -> PusherCommand)
             -> Text -> Maybe Channel -> Value -> PusherClient ()
 sendMessage cmd event channel data_ = do
   state <- ask
-  liftIO . atomically $
-    writeTQueue (commandQueue state) (cmd json)
+  liftIO (sendCommand state (cmd json))
 
   where
     json = Object . H.fromList $ concat

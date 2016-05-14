@@ -9,7 +9,6 @@ module Network.Pusher.WebSockets.Channel
   ) where
 
 -- 'base' imports
-import Control.Concurrent.STM (atomically, writeTQueue)
 import Data.Monoid ((<>))
 
 -- library imports
@@ -39,8 +38,7 @@ subscribe channel = do
   case data_ of
     Just (Object o) -> do
       let channelData = Object (H.insert "channel" (String channel) o)
-      liftIO . atomically $
-        writeTQueue (commandQueue state) (Subscribe handle channelData)
+      liftIO (sendCommand state (Subscribe handle channelData))
 
       pure (Just handle)
     _ -> pure Nothing
