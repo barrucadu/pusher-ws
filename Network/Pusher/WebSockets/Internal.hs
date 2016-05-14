@@ -61,7 +61,16 @@ data Pusher = Pusher
   }
 
 -- | A command to the Pusher thread.
-data PusherCommand = SendMessage Value | Subscribe Channel Value | Terminate
+data PusherCommand
+  = SendMessage Value
+  -- ^ Send a message over the network, not triggering event handlers.
+  | SendLocalMessage Value
+  -- ^ Do not send a message over the network, trigger event handlers.
+  | Subscribe Channel Value
+  -- ^ Send a channel subscription message and add to the
+  -- 'allChannels' set.
+  | Terminate
+  -- ^ Gracefully close the connection.
   deriving (Eq, Show)
 
 -- | An exception thrown to kill the client.

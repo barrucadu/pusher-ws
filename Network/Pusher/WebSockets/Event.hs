@@ -12,6 +12,7 @@ module Network.Pusher.WebSockets.Event
 
   -- * Client Events
   , triggerEvent
+  , localEvent
   ) where
 
 -- 'base' imports
@@ -105,12 +106,23 @@ unbind binding = do
 
 -------------------------------------------------------------------------------
 
--- | Send an event with some JSON data.
+-- | Send an event with some JSON data. This does not trigger local
+-- event handlers.
 triggerEvent :: Text -> Maybe Channel -> Value -> PusherClient ()
-triggerEvent event channel data_ = do
+triggerEvent = sendMessage SendMessage
+
+-- | Trigger local event handlers, but do not send the event over the
+-- network.
+localEvent :: Text -> Maybe Channel -> Value -> PusherClient ()
+localEvent = sendMessage SendLocalMessage
+
+-- | Helper function for 'triggerEvent' and 'localEvent'
+sendMessage :: (Value -> PusherCommand)
+            -> Text -> Maybe Channel -> Value -> PusherClient ()
+sendMessage cmd event channel data_ = do
   state <- ask
   liftIO . atomically $
-    writeTQueue (commandQueue state) (SendMessage json)
+    writeTQueue (commandQueue state) (cmd json)
 
   where
     json = Object . H.fromList $ concat

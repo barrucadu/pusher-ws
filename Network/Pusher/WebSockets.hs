@@ -144,6 +144,7 @@ pusherClient withConnection state = do
         command <- atomically . readTQueue $ commandQueue state
         case command of
           SendMessage json -> sendJSON conn json
+          SendLocalMessage json -> handleEvent state (Right json)
           Subscribe handle channelData -> do
             let json = Object $ H.fromList [ ("event", String "pusher:subscribe")
                                            , ("data", channelData)
