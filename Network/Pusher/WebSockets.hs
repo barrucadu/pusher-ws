@@ -56,7 +56,7 @@ import Data.Version (Version(..), showVersion)
 
 -- library imports
 import Control.Concurrent.STM (atomically, retry, readTQueue, readTVar, writeTQueue, writeTVar)
-import Control.Lens ((^?), ix)
+import Control.Lens ((&), (^?), (.~), ix)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Reader (ReaderT(..))
 import Data.Aeson (Value(..), decode', encode)
@@ -205,7 +205,7 @@ defaultHandlers :: [(Text, Value -> PusherClient ())]
 defaultHandlers =
   [ ("pusher:ping", pingHandler)
   , ("pusher:connection_established", establishConnection)
-  , ("pusher_internal:subscription_succeeded", addPresenceChannel)
+  , ("pusher_internal:subscription_succeeded", addChannel)
   , ("pusher_internal:member_added", addPresenceMember)
   , ("pusher_internal:member_removed", rmPresenceMember)
   ]
@@ -219,41 +219,59 @@ defaultHandlers =
     -- Not sure why this one needs a type signature but the others
     -- don't.
     establishConnection :: Value -> PusherClient ()
-    establishConnection event = liftMaybe $ do
-      socketid <- event ^? ix "data" . ix "socket_id"        . _String
-      timeout  <- event ^? ix "data" . ix "activity_timeout" . _Integral
+    establishConnection event = do
+      let socketidmay = event ^? ix "data" . ix "socket_id"        . _String
+      let timeoutmay  = event ^? ix "data" . ix "activity_timeout" . _Integral
 
-      pure $ do
-        state <- ask
-        strictModifyTVarIO (idleTimer state) (const (Just timeout))
-        strictModifyTVarIO (socketId  state) (const (Just socketid))
+      case (,) <$> socketidmay <*> timeoutmay of
+        Just (socketid, timeout) -> do
+          state <- ask
+          strictModifyTVarIO (idleTimer state) (const (Just timeout))
+          strictModifyTVarIO (socketId  state) (const (Just socketid))
+        Nothing -> pure ()
 
-    -- Save the list of users
-    addPresenceChannel event = liftMaybe $ do
-      channel <- eventChannel event
-      users   <- event ^? ix "data" . ix "hash" . _Object
+    -- Save the list of users (if there is one) and send the internal
+    -- "pusher:subscription_succeeded" event.
+    addChannel event = do
+      let channelmay = eventChannel event
+      let usersmay   = event ^? ix "data" . ix "hash" . _Object
 
-      pure (umap channel (const users))
+      case channelmay of
+        Just channel -> do
+          maybe (pure ()) (umap channel . const) usersmay
+          local (event & ix "event" .~ "pusher:subscription_succeeded")
+        Nothing -> pure ()
 
     -- Add a user to the list
-    addPresenceMember event = liftMaybe $ do
-      channel <- eventChannel event
-      uid     <- event ^? ix "data" . ix "user_id"   . _String
-      info    <- event ^? ix "data" . ix "user_info" . _Value
+    addPresenceMember event = do
+      let channelmay = eventChannel event
+      let uidmay     = event ^? ix "data" . ix "user_id"   . _String
+      let infomay    = event ^? ix "data" . ix "user_info" . _Value
 
-      pure (umap channel (H.insert uid info))
+      case (,,) <$> channelmay <*> uidmay <*> infomay of
+        Just (channel, uid, info) ->
+          umap channel (H.insert uid info)
+        Nothing -> pure ()
 
     -- Remove a user from the list
-    rmPresenceMember event = liftMaybe $ do
-      channel <- eventChannel event
-      uid     <- event ^? ix "data" . ix "user_id" . _String
+    rmPresenceMember event = do
+      let channelmay = eventChannel event
+      let uidmay     = event ^? ix "data" . ix "user_id" . _String
 
-      pure (umap channel (H.delete uid))
+      case (,) <$> channelmay <*> uidmay of
+        Just (channel, uid) ->
+          umap channel (H.delete uid)
+        Nothing -> pure ()
 
     --  Apply a function to the users list of a presence channel
     umap channel f = do
       state <- ask
       strictModifyTVarIO (presenceChannels state) (H.adjust (second f) channel)
+
+    -- Send a local message
+    local json = do
+      state <- ask
+      liftIO $ handleEvent state (Right json)
 
 -- | Block and wait for an event.
 awaitEvent :: WS.Connection -> IO (Either ByteString Value)

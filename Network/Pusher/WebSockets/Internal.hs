@@ -3,7 +3,6 @@ module Network.Pusher.WebSockets.Internal where
 -- 'base' imports
 import Control.Concurrent (ThreadId)
 import Control.Exception (Exception, SomeException, catch)
-import Data.Maybe (fromMaybe)
 import Data.String (IsString(..))
 
 -- library imports
@@ -214,10 +213,6 @@ instance Hashable Binding where
 -- | Get the current state.
 ask :: PusherClient Pusher
 ask = R.ask
-
--- | Turn a @Maybe@ action into a @PusherClient@ action.
-liftMaybe :: Maybe (PusherClient ()) -> PusherClient ()
-liftMaybe = fromMaybe (pure ())
 
 -- | Modify a @TVar@ strictly.
 strictModifyTVar :: NFData a => TVar a -> (a -> a) -> STM ()
