@@ -76,13 +76,13 @@ bindAll = bindGeneric Nothing
 bindGeneric :: Maybe Text -> Maybe Channel -> (Value -> PusherClient ())
             -> PusherClient Binding
 bindGeneric event channel handler = do
-  state <- ask
+  pusher <- ask
   liftIO . atomically $ do
-    b@(Binding i) <- readTVar (nextBinding state)
+    b@(Binding i) <- readTVar (nextBinding pusher)
     let b' = Binding (i+1)
-    strictModifyTVar (nextBinding state) (const b')
+    strictModifyTVar (nextBinding pusher) (const b')
     let h = Handler event channel wrappedHandler
-    strictModifyTVar (eventHandlers state) (H.insert b h)
+    strictModifyTVar (eventHandlers pusher) (H.insert b h)
     pure b
 
   where
@@ -101,8 +101,8 @@ bindGeneric event channel handler = do
 -- | Remove a binding
 unbind :: Binding -> PusherClient ()
 unbind binding = do
-  state <- ask
-  strictModifyTVarIO (eventHandlers state) (H.delete binding)
+  pusher <- ask
+  strictModifyTVarIO (eventHandlers pusher) (H.delete binding)
 
 -------------------------------------------------------------------------------
 
@@ -120,8 +120,8 @@ localEvent = sendMessage SendLocalMessage
 sendMessage :: (Value -> PusherCommand)
             -> Text -> Maybe Channel -> Value -> PusherClient ()
 sendMessage cmd event channel data_ = do
-  state <- ask
-  liftIO (sendCommand state (cmd json))
+  pusher <- ask
+  liftIO (sendCommand pusher (cmd json))
 
   where
     json = Object . H.fromList $ concat

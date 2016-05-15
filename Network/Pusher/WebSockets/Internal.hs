@@ -164,11 +164,11 @@ defaultPusher key opts = do
 -- | Send a command to the queue. Throw a 'PusherClosed' exception if
 -- the connection has been disconnected.
 sendCommand :: Pusher -> PusherCommand -> IO ()
-sendCommand state cmd = do
-  cstate <- readTVarIO (connState state)
+sendCommand pusher cmd = do
+  cstate <- readTVarIO (connState pusher)
   case cstate of
     Disconnected ccode -> E.throwIO (PusherClosed ccode)
-    _ -> atomically (writeTQueue (commandQueue state) cmd)
+    _ -> atomically (writeTQueue (commandQueue pusher) cmd)
 
 -------------------------------------------------------------------------------
 
@@ -222,12 +222,6 @@ defaultOptions = Options
   , cluster          = MT1
   , pusherURL        = Nothing
   }
-
--- | The region name of a cluster.
-clusterName :: Cluster -> String
-clusterName MT1 = "us-east-1"
-clusterName EU  = "eu-west-1"
-clusterName AP1 = "ap-southeast-1"
 
 -------------------------------------------------------------------------------
 

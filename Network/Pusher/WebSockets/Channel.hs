@@ -37,12 +37,12 @@ import Network.Pusher.WebSockets.Internal
 -- If authorisation fails, this returns @Nothing@.
 subscribe :: Text -> PusherClient (Maybe Channel)
 subscribe channel = do
-  state <- ask
+  pusher <- ask
   data_ <- getSubscribeData
   case data_ of
     Just (Object o) -> do
       let channelData = Object (H.insert "channel" (String channel) o)
-      liftIO (sendCommand state (Subscribe handle channelData))
+      liftIO (sendCommand pusher (Subscribe handle channelData))
 
       pure (Just handle)
     _ -> pure Nothing
@@ -62,8 +62,8 @@ unsubscribe channel = do
   triggerEvent "pusher:unsubscribe" (Just channel) Null
 
   -- Remove the presence channel
-  state <- ask
-  strictModifyTVarIO (presenceChannels state) (H.delete channel)
+  pusher <- ask
+  strictModifyTVarIO (presenceChannels pusher) (H.delete channel)
 
 -- | Return the list of all members in a presence channel.
 --
@@ -71,9 +71,8 @@ unsubscribe channel = do
 -- channel, returns an empty map.
 members :: Channel -> PusherClient (H.HashMap Text Value)
 members channel = do
-  state <- ask
-
-  chan <- H.lookup channel <$> readTVarIO (presenceChannels state)
+  pusher <- ask
+  chan <- H.lookup channel <$> readTVarIO (presenceChannels pusher)
   pure (maybe H.empty snd chan)
   
 -- | Return information about the local user in a presence channel.
@@ -82,9 +81,9 @@ members channel = do
 -- channel, returns @Null@.
 whoami :: Channel -> PusherClient Value
 whoami channel = do
-  state <- ask
+  pusher <- ask
 
-  chan <- H.lookup channel <$> readTVarIO (presenceChannels state)
+  chan <- H.lookup channel <$> readTVarIO (presenceChannels pusher)
   pure (maybe Null fst chan)
 
 -------------------------------------------------------------------------------
@@ -92,10 +91,10 @@ whoami channel = do
 -- | Send a channel authorisation request
 authorise :: Channel -> PusherClient (Maybe Value)
 authorise (Channel channel) = do
-  state <- ask
-  let authURL = authorisationURL (options state)
-  let Key key = appKey state
-  sockID <- readTVarIO (socketId state)
+  pusher <- ask
+  let authURL = authorisationURL (options pusher)
+  let Key key = appKey pusher
+  sockID <- readTVarIO (socketId pusher)
 
   case (authURL, sockID) of
     (Just authURL', Just sockID') -> do

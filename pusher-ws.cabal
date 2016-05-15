@@ -20,6 +20,7 @@ library
   exposed-modules:     Network.Pusher.WebSockets
                      , Network.Pusher.WebSockets.Channel
                      , Network.Pusher.WebSockets.Event
+                     , Network.Pusher.WebSockets.Util
   other-modules:       Network.Pusher.WebSockets.Internal
                      , Paths_pusher_ws
   -- other-extensions:    
