@@ -5,8 +5,8 @@ module Network.Pusher.WebSockets.Internal where
 import Control.Concurrent (ThreadId)
 import Control.Exception (IOException, Exception, SomeException, catch, toException)
 import qualified Control.Exception as E
-import Control.Monad (when)
 import Data.String (IsString(..))
+import Data.Word (Word16)
 
 -- library imports
 import Control.Concurrent.STM (STM, TVar, atomically, newTVar, modifyTVar')
@@ -79,15 +79,19 @@ data PusherCommand
   deriving (Eq, Show)
 
 -- | An exception thrown to kill the client.
-data TerminatePusher = TerminatePusher
-  deriving (Eq, Ord, Enum, Bounded, Read, Show)
+data TerminatePusher = TerminatePusher (Maybe Word16)
+  deriving (Eq, Ord, Read, Show)
 
 instance Exception TerminatePusher
 
 -- | Thrown if a 'Pusher' value is used after the connection has been
 -- closed.
-data PusherClosed = PusherClosed
-  deriving (Eq, Ord, Enum, Bounded, Read, Show)
+--
+-- If the server closed the connection, the error code is
+-- included. See the 4000-4099 error codes on
+-- <https://pusher.com/docs/pusher_protocol>.
+data PusherClosed = PusherClosed (Maybe Word16)
+  deriving (Eq, Ord, Read, Show)
 
 instance Exception PusherClosed
 
@@ -98,20 +102,33 @@ data ConnectionState
   -- ^ Initial state. No event is emitted.
   | Connecting
   -- ^ Trying to connect. This state will also be entered when trying
-  -- to reconnect after a connection failure. Emits the @"connecting"@
-  -- event.
+  -- to reconnect after a connection failure.
+  --
+  -- Emits the @"connecting"@ event.
   | Connected
   -- ^ The connection is established and authenticated with your
-  -- app. Emits the @"connected"@ event.
+  -- app.
+  --
+  -- Emits the @"connected"@ event.
   | Unavailable
   -- ^ The connection is temporarily unavailable. The network
   -- connection is down, the server is down, or something is blocking
-  -- the connection. Emits the @"unavailable"@ event and then enters
-  -- the @Connecting@ state again.
-  | Disconnected
-  -- ^ The connection has been intentionally closed. Emits the
-  -- @"disconnected"@ event and then kills all forked threads.
-  deriving (Eq, Ord, Enum, Bounded, Read, Show)
+  -- the connection.
+  --
+  -- Emits the @"unavailable"@ event and then enters the @Connecting@
+  -- state again.
+  | Disconnected (Maybe Word16)
+  -- ^ The connection has been closed by the client, or the server
+  -- indicated an error which cannot be resolved by reconnecting with
+  -- the same settings.
+  --
+  -- If the server closed the connection, the error code is
+  -- included. See the 4000-4099 error codes on
+  -- <https://pusher.com/docs/pusher_protocol>.
+  --
+  -- Emits the @"disconnected"@ event and then kills all forked
+  -- threads.
+  deriving (Eq, Ord, Read, Show)
 
 -- | State for a brand new connection.
 defaultPusher :: Key -> Options -> IO Pusher
@@ -149,9 +166,9 @@ defaultPusher key opts = do
 sendCommand :: Pusher -> PusherCommand -> IO ()
 sendCommand state cmd = do
   cstate <- readTVarIO (connState state)
-  when (cstate == Disconnected) $
-    E.throwIO PusherClosed
-  atomically (writeTQueue (commandQueue state) cmd)
+  case cstate of
+    Disconnected ccode -> E.throwIO (PusherClosed ccode)
+    _ -> atomically (writeTQueue (commandQueue state) cmd)
 
 -------------------------------------------------------------------------------
 

@@ -17,11 +17,11 @@ Current features:
 - Threads which automatically get cleaned up on connection close.
 - Automatic reconnection (and channel resubscription).
 - Connection state events.
+- Pusher close codes.
 
 Missing features:
 
 - "connecting_in" events.
-- Pusher error handling.
 
 The documentation of the latest developmental version is
 [available online][docs].

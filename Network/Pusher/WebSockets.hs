@@ -51,15 +51,14 @@ module Network.Pusher.WebSockets
 
 -- 'base' imports
 import Control.Arrow (second)
-import Control.Concurrent.MVar (newEmptyMVar, putMVar, takeMVar)
 import Control.Concurrent (ThreadId, forkIO, killThread, myThreadId, threadDelay)
-import Control.Exception (bracket_, throwIO)
-import Control.Monad (forever, unless)
+import Control.Exception (bracket_, fromException, throwIO)
+import Control.Monad (forever)
 import Data.Maybe (isNothing)
 import Data.Version (Version(..), showVersion)
 
 -- library imports
-import Control.Concurrent.STM (TVar, atomically, retry, newTVarIO, tryReadTQueue, readTVar, writeTVar)
+import Control.Concurrent.STM (atomically, retry, newTVarIO, tryReadTQueue, readTVar, writeTVar)
 import Control.Lens ((&), (^?), (.~), ix)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Reader (ReaderT(..))
@@ -69,7 +68,7 @@ import Data.ByteString.Lazy (ByteString)
 import qualified Data.HashMap.Strict as H
 import qualified Data.Set as S
 import Data.Text (Text, pack)
-import Data.Time.Clock (UTCTime, getCurrentTime, diffUTCTime)
+import Data.Time.Clock (getCurrentTime, diffUTCTime)
 import Network.Socket (HostName, PortNumber)
 import Network.WebSockets (runClientWith)
 import qualified Network.WebSockets as WS
@@ -122,10 +121,15 @@ pusherClient withConnection state = do
     mapM_ (\(e, h) -> bind e Nothing h) defaultHandlers
 
   -- Run client
-  ignoreAll () $ reconnecting
-    (changeConnectionState Connecting >> withConnection client)
-    (changeConnectionState Unavailable >> threadDelay (1 * 1000 * 1000))
-  changeConnectionState Disconnected
+  catchAll
+    (reconnecting
+      (changeConnectionState Connecting >> withConnection client)
+      (changeConnectionState Unavailable >> threadDelay (1 * 1000 * 1000)))
+    (\e -> case fromException e of
+      Just (TerminatePusher closeCode) ->
+        changeConnectionState (Disconnected closeCode)
+      Nothing ->
+        changeConnectionState (Disconnected Nothing))
 
   -- Kill forked threads
   readTVarIO (threadStore state) >>= mapM_ killThread
@@ -133,8 +137,8 @@ pusherClient withConnection state = do
   where
     client conn = flip catchAll handleExc $ do
       -- Fork off an event handling thread
-      allClosed <- newEmptyMVar
-      _ <- forkIO (handleThread conn (lastReceived state) allClosed)
+      closevar <- newTVarIO Nothing
+      _ <- forkIO (handleThread conn (lastReceived state) closevar)
 
       -- Wait for the pusher:connection_established event.
       timeout <- liftIO . atomically $
@@ -144,7 +148,6 @@ pusherClient withConnection state = do
       -- This will do more pinging than necessary, but it's far
       -- simpler than keeping track of the actual inactivity, and
       -- ensures that enough pings are sent.
-      closevar <- newTVarIO False
       _ <- forkIO (pingThread conn timeout closevar)
 
       -- Resubscribe to channels
@@ -157,39 +160,50 @@ pusherClient withConnection state = do
       -- Handle commands
       forever $ do
         command <- atomically $ do
-          cmd  <- tryReadTQueue (commandQueue state)
-          kill <- readTVar closevar
-          case (cmd, kill) of
-            (Just cmd', _)   -> pure (Just cmd')
-            (Nothing, True)  -> pure Nothing
-            (Nothing, False) -> retry
+          cmd   <- tryReadTQueue (commandQueue state)
+          ccode <- readTVar closevar
+          case (cmd, ccode) of
+            (Just cmd', _)         -> pure (Right cmd')
+            (Nothing, Just ccode') -> pure (Left  ccode')
+            (Nothing, Nothing) -> retry
 
         case command of
-          Just (SendMessage json) ->
+          Right (SendMessage json) ->
             sendJSON conn json
 
-          Just (SendLocalMessage json) ->
+          Right (SendLocalMessage json) ->
             handleEvent state (Right json)
 
-          Just (Subscribe handle channelData) -> do
+          Right (Subscribe handle channelData) -> do
             let json = Object $ H.fromList [ ("event", String "pusher:subscribe")
                                            , ("data", channelData)
                                            ]
             sendJSON conn json
             strictModifyTVarIO (allChannels state) (S.insert handle)
 
-          Just Terminate -> do
+          Right Terminate ->
             WS.sendClose conn ("goodbye" :: Text)
-            takeMVar allClosed
-            throwIO TerminatePusher
 
-          Nothing -> throwIO WS.ConnectionClosed
+          Left closeCode
+            -- Graceful termination
+            | closeCode < 4000 ->
+              throwIO $ TerminatePusher Nothing
+            -- Server specified not to reconnect
+            | closeCode >= 4000 && closeCode < 4100 ->
+              throwIO . TerminatePusher $ Just closeCode
+            -- Reconnect
+            | otherwise ->
+              throwIO WS.ConnectionClosed
 
     -- Receive and handle events until the connection is closed.
-    handleThread conn lastMsgTime allClosed = do
-      ignoreAll () . forever $
-        awaitEvent conn lastMsgTime >>= handleEvent state
-      putMVar allClosed ()
+    handleThread conn lastMsgTime closevar = catchAll
+      (forever $ do
+        msg <- awaitEvent conn
+        atomically . writeTVar lastMsgTime =<< getCurrentTime
+        handleEvent state msg)
+      (\e -> atomically . writeTVar closevar $ case fromException e of
+        Just (WS.CloseRequest ccode _) -> Just ccode
+        _ -> reconnectImmediately)
 
     -- Send a ping every time the timeout elapses, if the connection
     -- closes write 'True' to the provided 'TVar'.
@@ -207,15 +221,14 @@ pusherClient withConnection state = do
         lastMsg <- readTVarIO (lastReceived state)
         let fuzz = 30
         if now `diffUTCTime` lastMsg > fromIntegral timeout + fuzz
-        then atomically (writeTVar closevar True)
-        else pinger (i + 1)
+         then atomically (writeTVar closevar reconnectImmediately)
+         else pinger (i + 1)
 
     -- Send some JSON down the channel
     sendJSON conn = WS.sendDataMessage conn . WS.Text . encode
 
     -- Mark the connection as closed by clearing the idle timer and
-    -- socket ID, send the "unavailable" connection event if this
-    -- disconnection wasn't requested, then rethrow the exception.
+    -- socket ID and rethrow the exception.
     handleExc e = do
       strictModifyTVarIO (idleTimer state) (const Nothing)
       strictModifyTVarIO (socketId  state) (const Nothing)
@@ -229,12 +242,15 @@ pusherClient withConnection state = do
         writeTVar (connState state) s
         pure $ (Object . H.singleton "event" . String) <$>
           case (oldState == s, s) of
-            (False, Connecting)   -> Just "connecting"
-            (False, Connected)    -> Just "connected"
-            (False, Unavailable)  -> Just "unavailable"
-            (False, Disconnected) -> Just "disconnected"
+            (False, Connecting)     -> Just "connecting"
+            (False, Connected)      -> Just "connected"
+            (False, Unavailable)    -> Just "unavailable"
+            (False, Disconnected _) -> Just "disconnected"
             _ -> Nothing
       maybe (pure ()) (handleEvent state . Right) ev
+
+    -- 4200 = generic reconnect immediately
+    reconnectImmediately = Just 4200
 
 -- | The hostname, port, and path (including querystring) to connect
 -- to.
@@ -338,13 +354,10 @@ defaultHandlers =
       liftIO $ handleEvent state (Right json)
 
 -- | Block and wait for an event.
-awaitEvent :: WS.Connection -> TVar UTCTime -> IO (Either ByteString Value)
-awaitEvent conn lastMsgTime = do
-  msg <- WS.receiveDataMessage conn
-  atomically . writeTVar lastMsgTime =<< getCurrentTime
-  pure $ case msg of
-    WS.Text   bs -> maybe (Left bs) Right (decode' bs)
-    WS.Binary bs -> Left bs
+awaitEvent :: WS.Connection -> IO (Either ByteString Value)
+awaitEvent = fmap decode . WS.receiveDataMessage where
+  decode (WS.Text   bs) = maybe (Left bs) Right (decode' bs)
+  decode (WS.Binary bs) = Left bs
 
 -- | Launch all event handlers which are bound to the current event.
 handleEvent :: Pusher -> Either ByteString Value -> IO ()
