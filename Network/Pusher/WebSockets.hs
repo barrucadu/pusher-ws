@@ -18,6 +18,7 @@ module Network.Pusher.WebSockets
   , ConnectionState(..)
   , connectionState
   , disconnect
+  , disconnectBlocking
 
   -- * Channels
   , Channel
@@ -109,6 +110,18 @@ disconnect :: PusherClient ()
 disconnect = do
   state <- ask
   liftIO (sendCommand state Terminate)
+
+-- | Like 'disconnect', but block until the connection is actually
+-- closed.
+disconnectBlocking :: PusherClient ()
+disconnectBlocking = do
+  state <- ask
+  disconnect
+  liftIO . atomically $ do
+    cstate <- readTVar (connState state)
+    case cstate of
+      Disconnected _ -> pure ()
+      _ -> retry
 
 -- | Client thread: connect to Pusher and process commands,
 -- reconnecting automatically, until finally told to terminate.

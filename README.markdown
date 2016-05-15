@@ -50,7 +50,7 @@ runPusherClient pusher $ do
 
   -- Wait for user input and then close the connection.
   liftIO (void getLine)
-  disconnect
+  disconnectBlocking
 ```
 
 Contributing
