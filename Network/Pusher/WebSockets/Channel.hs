@@ -30,6 +30,10 @@ import Network.Pusher.WebSockets.Internal
 -- \"private-\" or \"presence-\", authorisation is performed
 -- automatically.
 --
+-- This returns immediately. You should wait for the
+-- @"pusher:subscription_succeeded"@ event before attempting to use
+-- presence channel functions like 'members' and 'whoami'.
+--
 -- If authorisation fails, this returns @Nothing@.
 subscribe :: Text -> PusherClient (Maybe Channel)
 subscribe channel = do
