@@ -42,7 +42,7 @@ data Pusher = Pusher
   -- ^ Queue to send commands to the client thread.
   , connState :: TVar ConnectionState
   -- ^ The state of the connection.
-  , appKey :: Key
+  , appKey :: AppKey
   -- ^ The application key.
   , options :: Options
   -- ^ Connection options
@@ -131,7 +131,7 @@ data ConnectionState
   deriving (Eq, Ord, Read, Show)
 
 -- | State for a brand new connection.
-defaultPusher :: Key -> Options -> IO Pusher
+defaultPusher :: AppKey -> Options -> IO Pusher
 defaultPusher key opts = do
   now <- getCurrentTime
   atomically $ do
@@ -188,7 +188,7 @@ data Options = Options
   -- the app is created in a different cluster to the default
   -- us-east-1. Defaults to @MT1@.
 
-  , pusherURL :: Maybe (HostName, PortNumber, Key -> String)
+  , pusherURL :: Maybe (HostName, PortNumber, AppKey -> String)
   -- ^ The host, port, and path to use instead of the standard Pusher
   -- servers. If set, the cluster is ignored. Defaults to @Nothing@.
   }
@@ -205,14 +205,14 @@ instance NFData Cluster where
   rnf c = c `seq` ()
 
 -- | Your application's API key.
-newtype Key = Key String
+newtype AppKey = AppKey String
    deriving (Eq, Ord, Show, Read)
 
-instance IsString Key where
-  fromString = Key
+instance IsString AppKey where
+  fromString = AppKey
 
-instance NFData Key where
-  rnf (Key k) = rnf k
+instance NFData AppKey where
+  rnf (AppKey k) = rnf k
 
 -- | See 'Options' field documentation for what is set here.
 defaultOptions :: Options

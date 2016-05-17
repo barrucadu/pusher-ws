@@ -4,7 +4,7 @@ module Network.Pusher.WebSockets
   ( -- * Pusher
     Pusher
   , PusherClosed(..)
-  , Key(..)
+  , AppKey(..)
   , Options(..)
   , Cluster(..)
   , pusherWithKey
@@ -50,7 +50,7 @@ import Network.Pusher.WebSockets.Util
 {-# ANN module ("HLint: ignore Use import/export shortcut" :: String) #-}
 
 -- | Connect to Pusher.
-pusherWithKey :: Key -> Options -> IO Pusher
+pusherWithKey :: AppKey -> Options -> IO Pusher
 pusherWithKey key opts
   | encrypted opts = run (runSecureClientWith host port path)
   | otherwise      = run (runClientWith host (fromIntegral port) path)

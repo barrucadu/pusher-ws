@@ -35,8 +35,8 @@ fork (ReaderT action) = ReaderT (forkIO . run) where
 
 -- | The hostname, port, and path (including querystring) to connect
 -- to.
-makeURL :: Key -> Options -> (HostName, PortNumber, String)
-makeURL key@(Key k) opts = case pusherURL opts of
+makeURL :: AppKey -> Options -> (HostName, PortNumber, String)
+makeURL key@(AppKey k) opts = case pusherURL opts of
   Just (host, port, path) -> (host, port, path key ++ queryString)
   Nothing -> (defaultHost, defaultPort, defaultPath)
 
