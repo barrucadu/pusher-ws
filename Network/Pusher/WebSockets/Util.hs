@@ -35,9 +35,9 @@ fork (ReaderT action) = ReaderT (forkIO . run) where
 
 -- | The hostname, port, and path (including querystring) to connect
 -- to.
-makeURL :: AppKey -> Options -> (HostName, PortNumber, String)
-makeURL key@(AppKey k) opts = case pusherURL opts of
-  Just (host, port, path) -> (host, port, path key ++ queryString)
+makeURL :: Options -> (HostName, PortNumber, String)
+makeURL opts = case pusherURL opts of
+  Just (host, port, path) -> (host, port, path ++ queryString)
   Nothing -> (defaultHost, defaultPort, defaultPath)
 
   where
@@ -52,7 +52,8 @@ makeURL key@(AppKey k) opts = case pusherURL opts of
       | encrypted opts = 443
       | otherwise = 80
 
-    defaultPath = "/app/" ++ k ++ queryString
+    defaultPath = case appKey opts of
+      AppKey k -> "/app/" ++ k ++ queryString
 
     queryString = "?client=haskell-pusher-ws&protocol=7&version="
                ++ showVersion semver

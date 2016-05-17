@@ -42,8 +42,6 @@ data Pusher = Pusher
   -- ^ Queue to send commands to the client thread.
   , connState :: TVar ConnectionState
   -- ^ The state of the connection.
-  , appKey :: AppKey
-  -- ^ The application key.
   , options :: Options
   -- ^ Connection options
   , idleTimer :: TVar (Maybe Int)
@@ -131,8 +129,8 @@ data ConnectionState
   deriving (Eq, Ord, Read, Show)
 
 -- | State for a brand new connection.
-defaultPusher :: AppKey -> Options -> IO Pusher
-defaultPusher key opts = do
+defaultPusher :: Options -> IO Pusher
+defaultPusher opts = do
   now <- getCurrentTime
   atomically $ do
     defCommQueue    <- newTQueue
@@ -149,7 +147,6 @@ defaultPusher key opts = do
     pure Pusher
       { commandQueue     = defCommQueue
       , connState        = defConnState
-      , appKey           = key
       , options          = opts
       , idleTimer        = defIdleTimer
       , lastReceived     = defLastReceived
@@ -173,7 +170,10 @@ sendCommand pusher cmd = do
 -------------------------------------------------------------------------------
 
 data Options = Options
-  { encrypted :: Bool
+  { appKey :: AppKey
+  -- ^ The application key.
+
+  , encrypted :: Bool
   -- ^ If the connection should be made over an encrypted
   -- connection. Defaults to @True@.
 
@@ -188,10 +188,21 @@ data Options = Options
   -- the app is created in a different cluster to the default
   -- us-east-1. Defaults to @MT1@.
 
-  , pusherURL :: Maybe (HostName, PortNumber, AppKey -> String)
+  , pusherURL :: Maybe (HostName, PortNumber, String)
   -- ^ The host, port, and path to use instead of the standard Pusher
   -- servers. If set, the cluster is ignored. Defaults to @Nothing@.
-  }
+  } deriving (Eq, Ord, Show)
+
+instance NFData Options where
+  rnf o = rnf ( appKey o
+              , encrypted o
+              , authorisationURL o
+              , cluster o
+              , mangle (pusherURL o)
+              )
+    where
+      mangle Nothing = Nothing
+      mangle (Just (h, p, s)) = p `seq` Just (h, s)
 
 -- | Clusters correspond to geographical regions where apps can be
 -- assigned to.
@@ -215,9 +226,10 @@ instance NFData AppKey where
   rnf (AppKey k) = rnf k
 
 -- | See 'Options' field documentation for what is set here.
-defaultOptions :: Options
-defaultOptions = Options
-  { encrypted        = True
+defaultOptions :: AppKey -> Options
+defaultOptions key = Options
+  { appKey           = key
+  , encrypted        = True
   , authorisationURL = Nothing
   , cluster          = MT1
   , pusherURL        = Nothing

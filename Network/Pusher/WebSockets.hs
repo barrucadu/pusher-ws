@@ -7,7 +7,7 @@ module Network.Pusher.WebSockets
   , AppKey(..)
   , Options(..)
   , Cluster(..)
-  , pusherWithKey
+  , pusherWithOptions
   , defaultOptions
 
   -- ** Monad
@@ -50,17 +50,17 @@ import Network.Pusher.WebSockets.Util
 {-# ANN module ("HLint: ignore Use import/export shortcut" :: String) #-}
 
 -- | Connect to Pusher.
-pusherWithKey :: AppKey -> Options -> IO Pusher
-pusherWithKey key opts
+pusherWithOptions :: Options -> IO Pusher
+pusherWithOptions opts
   | encrypted opts = run (runSecureClientWith host port path)
   | otherwise      = run (runClientWith host (fromIntegral port) path)
 
   where
-    (host, port, path) = makeURL key opts
+    (host, port, path) = makeURL opts
 
     -- Run the client
     run withConn = do
-      pusher <- defaultPusher key opts
+      pusher <- defaultPusher opts
 
       let connOpts = WS.defaultConnectionOptions
             { WS.connectionOnPong = atomically . writeTVar (lastReceived pusher) =<< getCurrentTime }

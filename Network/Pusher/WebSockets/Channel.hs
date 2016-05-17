@@ -93,7 +93,7 @@ authorise :: Channel -> PusherClient (Maybe Value)
 authorise (Channel channel) = do
   pusher <- ask
   let authURL = authorisationURL (options pusher)
-  let AppKey key = appKey pusher
+  let AppKey key = appKey (options pusher)
   sockID <- readTVarIO (socketId pusher)
 
   case (authURL, sockID) of

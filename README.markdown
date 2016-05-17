@@ -37,7 +37,7 @@ let key = "your-key"
 let channels = ["your", "channels"]
 
 -- Connect to Pusher with your key, SSL, and the us-east-1 region.
-pusher <- pusherWithKey key defaultOptions
+pusher <- pusherWithOptions (defaultOptions key)
 
 -- Run some actions with this connection:
 runPusherClient pusher $ do
