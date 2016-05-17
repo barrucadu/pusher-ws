@@ -36,11 +36,9 @@ print out the messages received:
 let key = "your-key"
 let channels = ["your", "channels"]
 
--- Connect to Pusher with your key, SSL, and the us-east-1 region.
-pusher <- pusherWithOptions (defaultOptions key)
-
--- Run some actions with this connection:
-runPusherClient pusher $ do
+-- Connect to Pusher with your key, SSL, and the us-east-1 region, and
+-- do some stuff.
+pusherWithOptions (defaultOptions key) $ do
   -- Subscribe to all the channels
   mapM_ subscribe channels
 

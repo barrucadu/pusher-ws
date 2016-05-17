@@ -21,17 +21,18 @@ import Paths_pusher_ws (version)
 
 -- | Fork a thread which will be killed when the connection is closed.
 fork :: PusherClient () -> PusherClient ThreadId
-fork (ReaderT action) = ReaderT (forkIO . run) where
-  run s = bracket_ setup teardown (action s) where
-    -- Add the thread ID to the list
-    setup = do
-      tid <- myThreadId
-      strictModifyTVarIO (threadStore s) (S.insert tid)
+fork (PusherClient (ReaderT action)) = PusherClient $ ReaderT (forkIO . run)
+  where
+    run s = bracket_ setup teardown (action s) where
+      -- Add the thread ID to the list
+      setup = do
+        tid <- myThreadId
+        strictModifyTVarIO (threadStore s) (S.insert tid)
 
-    -- Remove the thread ID from the list
-    teardown = do
-      tid <- myThreadId
-      strictModifyTVarIO (threadStore s) (S.delete tid)
+     -- Remove the thread ID from the list
+      teardown = do
+        tid <- myThreadId
+        strictModifyTVarIO (threadStore s) (S.delete tid)
 
 -- | The hostname, port, and path (including querystring) to connect
 -- to.

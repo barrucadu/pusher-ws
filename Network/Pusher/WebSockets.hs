@@ -2,17 +2,13 @@
 
 module Network.Pusher.WebSockets
   ( -- * Pusher
-    Pusher
+    PusherClient
   , PusherClosed(..)
   , AppKey(..)
   , Options(..)
   , Cluster(..)
   , pusherWithOptions
   , defaultOptions
-
-  -- ** Monad
-  , PusherClient
-  , runPusherClient
 
   -- ** Connection
   , ConnectionState(..)
@@ -50,8 +46,13 @@ import Network.Pusher.WebSockets.Util
 {-# ANN module ("HLint: ignore Use import/export shortcut" :: String) #-}
 
 -- | Connect to Pusher.
-pusherWithOptions :: Options -> IO Pusher
-pusherWithOptions opts
+--
+-- This does NOT automatically disconnect from Pusher when the
+-- supplied action terminates, so either the actio will need to call
+-- 'disconnect' or 'disconnectBlocking' as the last thing it does, or
+-- one of the event handlers will need to do so eventually.
+pusherWithOptions :: Options -> PusherClient a -> IO a
+pusherWithOptions opts action
   | encrypted opts = run (runSecureClientWith host port path)
   | otherwise      = run (runClientWith host (fromIntegral port) path)
 
@@ -67,7 +68,7 @@ pusherWithOptions opts
       let withConnection = withConn connOpts []
 
       _ <- forkIO (pusherClient pusher withConnection)
-      pure pusher
+      runPusherClient pusher action
 
 -- | Get the connection state.
 connectionState :: PusherClient ConnectionState

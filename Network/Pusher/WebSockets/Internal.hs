@@ -1,3 +1,4 @@
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 module Network.Pusher.WebSockets.Internal where
 
@@ -28,11 +29,12 @@ import Network.WebSockets (ConnectionException, HandshakeException)
 -------------------------------------------------------------------------------
 
 -- | A convenience wrapper for 'Pusher' actions.
-type PusherClient = ReaderT Pusher IO
+newtype PusherClient a = PusherClient (ReaderT Pusher IO a)
+  deriving (Functor, Applicative, Monad, MonadIO)
 
 -- | Run a 'PusherClient'.
 runPusherClient :: Pusher -> PusherClient a -> IO a
-runPusherClient = flip runReaderT
+runPusherClient pusher (PusherClient action) = runReaderT action pusher
 
 -- | Pusher connection handle.
 --
@@ -82,8 +84,8 @@ data TerminatePusher = TerminatePusher (Maybe Word16)
 
 instance Exception TerminatePusher
 
--- | Thrown if a 'Pusher' value is used after the connection has been
--- closed.
+-- | Thrown if attempting to communicate with Pusher after the
+-- connection has been closed.
 --
 -- If the server closed the connection, the error code is
 -- included. See the 4000-4099 error codes on
@@ -285,7 +287,7 @@ instance Hashable Binding where
 
 -- | Get the current state.
 ask :: PusherClient Pusher
-ask = R.ask
+ask = PusherClient R.ask
 
 -- | Modify a @TVar@ strictly.
 strictModifyTVar :: NFData a => TVar a -> (a -> a) -> STM ()
