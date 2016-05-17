@@ -28,7 +28,10 @@ import Network.WebSockets (ConnectionException, HandshakeException)
 
 -------------------------------------------------------------------------------
 
--- | A convenience wrapper for 'Pusher' actions.
+-- | A value of type @PusherClient a@ is a computation with access to
+-- a connection to Pusher which, when executed, may perform
+-- Pusher-specific actions such as subscribing to channels and
+-- receiving events, as well as arbitrary I/O.
 newtype PusherClient a = PusherClient (ReaderT Pusher IO a)
   deriving (Functor, Applicative, Monad, MonadIO)
 
