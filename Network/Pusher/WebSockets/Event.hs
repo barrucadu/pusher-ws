@@ -1,5 +1,14 @@
 {-# LANGUAGE OverloadedStrings #-}
 
+-- |
+-- Module      : Network.Pusher.WebSockets.Event
+-- Copyright   : (c) 2016 Michael Walker
+-- License     : MIT
+-- Maintainer  : Michael Walker <mike@barrucadu.co.uk>
+-- Stability   : experimental
+-- Portability : OverloadedStrings
+--
+-- Functions for creating event handlers and triggering events.
 module Network.Pusher.WebSockets.Event
   ( eventType
   , eventChannel

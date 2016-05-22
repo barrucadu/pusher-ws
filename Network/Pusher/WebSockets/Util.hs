@@ -1,7 +1,15 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# OPTIONS -fno-warn-warnings-deprecations #-}
 
--- | General utility functions.
+-- |
+-- Module      : Network.Pusher.WebSockets.Util
+-- Copyright   : (c) 2016 Michael Walker
+-- License     : MIT
+-- Maintainer  : Michael Walker <mike@barrucadu.co.uk>
+-- Stability   : experimental
+-- Portability : OverloadedStrings
+--
+-- General utility functions.
 module Network.Pusher.WebSockets.Util where
 
 -- 'base' imports

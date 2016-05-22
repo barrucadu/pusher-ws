@@ -1,3 +1,21 @@
+-- |
+-- Module      : Network.Pusher.WebSockets
+-- Copyright   : (c) 2016 Michael Walker
+-- License     : MIT
+-- Maintainer  : Michael Walker <mike@barrucadu.co.uk>
+-- Stability   : experimental
+-- Portability : portable
+--
+-- Pusher has two APIs: the REST API and the websocket API. The
+-- websocket API, which is what this package implements, is used by
+-- clients primarily to subscribe to channels and receive events. This
+-- library encourages a callback-style approach to Pusher, where the
+-- 'pusherWithOptions' function is used to subscribe to some channels
+-- and bind some event handlers, and then block until the connection
+-- is closed.
+--
+-- See <https://pusher.com/docs/pusher_protocol> for details of the
+-- protocol.
 module Network.Pusher.WebSockets
   ( -- * Pusher
     PusherClient

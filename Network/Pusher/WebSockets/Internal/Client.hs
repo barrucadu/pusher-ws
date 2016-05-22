@@ -1,6 +1,15 @@
 {-# LANGUAGE OverloadedStrings #-}
 
--- | Pusher network client.
+-- |
+-- Module      : Network.Pusher.WebSockets.Internal.Client
+-- Copyright   : (c) 2016 Michael Walker
+-- License     : MIT
+-- Maintainer  : Michael Walker <mike@barrucadu.co.uk>
+-- Stability   : experimental
+-- Portability : OverloadedStrings
+--
+-- Pusher network client. This is NOT considered to form part of the
+-- public API of this library.
 module Network.Pusher.WebSockets.Internal.Client where
 
 -- 'base' imports

@@ -1,6 +1,15 @@
 {-# LANGUAGE OverloadedStrings #-}
 
--- | Eevnt handlers.
+-- |
+-- Module      : Network.Pusher.WebSockets.Internal.Event
+-- Copyright   : (c) 2016 Michael Walker
+-- License     : MIT
+-- Maintainer  : Michael Walker <mike@barrucadu.co.uk>
+-- Stability   : experimental
+-- Portability : OverloadedStrings
+--
+-- Event handling. This is NOT considered to form part of the public
+-- API of this library.
 module Network.Pusher.WebSockets.Internal.Event where
 
 -- 'base' imports

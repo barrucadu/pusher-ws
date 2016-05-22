@@ -1,5 +1,14 @@
 {-# LANGUAGE OverloadedStrings #-}
 
+-- |
+-- Module      : Network.Pusher.WebSockets.Channel
+-- Copyright   : (c) 2016 Michael Walker
+-- License     : MIT
+-- Maintainer  : Michael Walker <mike@barrucadu.co.uk>
+-- Stability   : experimental
+-- Portability : OverloadedStrings
+--
+-- Functions for subscribing to and querying channels.
 module Network.Pusher.WebSockets.Channel
   ( Channel
   , subscribe
