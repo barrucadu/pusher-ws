@@ -13,6 +13,7 @@ module Network.Pusher.WebSockets
   , connectionState
   , disconnect
   , disconnectBlocking
+  , blockUntilDisconnected
 
   -- * Re-exports
   , module Network.Pusher.WebSockets.Channel
@@ -85,6 +86,16 @@ disconnect = do
 disconnectBlocking :: PusherClient ()
 disconnectBlocking = do
   disconnect
+  blockUntilDisconnected
+
+-- | Block until the connection is closed (but do not initiate a
+-- disconnect).
+--
+-- This is useful if you run 'pusherWithOptions' in the main thread to
+-- prevent the program from terminating until one of your event
+-- handlers decides to disconnect.
+blockUntilDisconnected :: PusherClient ()
+blockUntilDisconnected = do
   pusher <- ask
   liftIO . atomically $ do
     cstate <- readTVar (connState pusher)
