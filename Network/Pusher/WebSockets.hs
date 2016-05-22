@@ -14,6 +14,25 @@
 -- and bind some event handlers, and then block until the connection
 -- is closed.
 --
+-- A small example, which simply prints all received events:
+--
+-- > let key = "your-key"
+-- > let channels = ["your", "channels"]
+-- >
+-- > -- Connect to Pusher with your key, SSL, and the us-east-1 region,
+-- > -- and do some stuff.
+-- > pusherWithOptions (defaultOptions key) $ do
+-- >   -- Subscribe to all the channels
+-- >   mapM_ subscribe channels
+-- >
+-- >   -- Bind an event handler for all events on all channels which
+-- >   -- prints the received JSON.
+-- >   bindAll Nothing (liftIO . print)
+-- >
+-- >   -- Wait for user input and then close the connection.
+-- >   liftIO (void getLine)
+-- >   disconnectBlocking
+--
 -- See <https://pusher.com/docs/pusher_protocol> for details of the
 -- protocol.
 module Network.Pusher.WebSockets

@@ -4,7 +4,34 @@
 name:                pusher-ws
 version:             0.0.0.0
 synopsis:            Implementation of the Pusher WebSocket protocol
--- description:         
+
+description:
+  An implementation of the Pusher WebSocket (client) protocol in
+  Haskell.
+  .
+  Current features:
+  .
+  * @ws://@ and @wss://@ protocols.
+  * Clusters.
+  * Subscribing to channels.
+  * Unsubscribing from channels.
+  * Authorisation for private and presence channels.
+  * Binding event handlers.
+  * Unbinding event handlers
+  * Sending client events.
+  * Threads which automatically get cleaned up on connection close.
+  * Automatic reconnection (and channel resubscription).
+  * Connection state events.
+  * Pusher close codes.
+  .
+  Missing features:
+  .
+  * "connecting_in" events.
+  .
+  See the <https://github.com/barrucadu/pusher-ws README> for more
+  details.
+
+
 homepage:            https://github.com/barrucadu/pusher-ws
 license:             MIT
 license-file:        LICENSE
