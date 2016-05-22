@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 module Network.Pusher.WebSockets
   ( -- * Pusher
     PusherClient
@@ -43,7 +41,7 @@ import Network.Pusher.WebSockets.Util
 
 -- Haddock doesn't like the import/export shortcut when generating
 -- docs.
-{-# ANN module ("HLint: ignore Use import/export shortcut" :: String) #-}
+{-# ANN module "HLint: ignore Use import/export shortcut" #-}
 
 -- | Connect to Pusher.
 --
