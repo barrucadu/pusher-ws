@@ -84,7 +84,7 @@ import Network.Pusher.WebSockets.Util
 -- | Connect to Pusher.
 --
 -- This does NOT automatically disconnect from Pusher when the
--- supplied action terminates, so either the actio will need to call
+-- supplied action terminates, so either the action will need to call
 -- 'disconnect' or 'disconnectBlocking' as the last thing it does, or
 -- one of the event handlers will need to do so eventually.
 pusherWithOptions :: Options -> PusherClient a -> IO a
