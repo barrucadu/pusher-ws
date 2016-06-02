@@ -13,11 +13,12 @@
 module Network.Pusher.WebSockets.Util where
 
 -- 'base' imports
-import Control.Concurrent (ThreadId, forkIO, myThreadId)
-import Control.Exception (bracket_)
 import Data.Version (Version(..), showVersion)
 
 -- library imports
+import Control.Concurrent.Classy (MonadConc, ThreadId, myThreadId)
+import qualified Control.Concurrent.Classy as C
+import Control.Monad.Catch (bracket_)
 import Control.Monad.Trans.Reader (ReaderT(..))
 import qualified Data.Set as S
 import Data.Text (Text, unpack)
@@ -28,19 +29,19 @@ import Network.Pusher.WebSockets.Internal
 import Paths_pusher_ws (version)
 
 -- | Fork a thread which will be killed when the connection is closed.
-fork :: PusherClient () -> PusherClient ThreadId
-fork (PusherClient (ReaderT action)) = PusherClient $ ReaderT (forkIO . run)
+fork :: MonadConc m => PusherClient m () -> PusherClient m (ThreadId m)
+fork (PusherClient (ReaderT action)) = PusherClient $ ReaderT (C.fork . run)
   where
     run s = bracket_ setup teardown (action s) where
       -- Add the thread ID to the list
       setup = do
         tid <- myThreadId
-        strictModifyTVarIO (threadStore s) (S.insert tid)
+        modifyTVarConc (threadStore s) (S.insert tid)
 
      -- Remove the thread ID from the list
       teardown = do
         tid <- myThreadId
-        strictModifyTVarIO (threadStore s) (S.delete tid)
+        modifyTVarConc (threadStore s) (S.delete tid)
 
 -- | The hostname, port, and path (including querystring) to connect
 -- to.

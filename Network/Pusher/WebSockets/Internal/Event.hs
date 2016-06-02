@@ -17,14 +17,14 @@ import Control.Arrow (second)
 import Data.Maybe (isNothing)
 
 -- library imports
+import Control.Concurrent.Classy (MonadConc, readTVarConc)
 import Control.Lens ((&), (^?), (.~), ix)
-import Control.Monad.IO.Class (liftIO)
-import Data.Aeson (Value(..), decode')
+import Control.Monad.Trans.Class (lift)
+import Data.Aeson (Value(..))
 import Data.Aeson.Lens (_Integral, _Object, _String, _Value)
 import Data.ByteString.Lazy (ByteString)
 import qualified Data.HashMap.Strict as H
 import Data.Text (Text)
-import Network.WebSockets (Connection, DataMessage(..), receiveDataMessage)
 
 -- local imports
 import Network.Pusher.WebSockets.Channel
@@ -35,19 +35,13 @@ import Network.Pusher.WebSockets.Util
 -------------------------------------------------------------------------------
 -- Handler dispatch
 
--- | Block and wait for an event.
-awaitEvent :: Connection -> IO (Either ByteString Value)
-awaitEvent = fmap decode . receiveDataMessage where
-  decode (Text   bs) = maybe (Left bs) Right (decode' bs)
-  decode (Binary bs) = Left bs
-
 -- | Launch all event handlers which are bound to the current event.
-handleEvent :: Pusher -> Either ByteString Value -> IO ()
+handleEvent :: MonadConc m => Pusher m -> Either ByteString Value -> m ()
 handleEvent pusher (Right event) = do
   let match (Handler e c _) = (isNothing e || e == Just (eventType event)) &&
                               (isNothing c || c == eventChannel event)
 
-  handlers <- filter match . H.elems <$> readTVarIO (eventHandlers pusher)
+  handlers <- filter match . H.elems <$> readTVarConc (eventHandlers pusher)
   runPusherClient pusher $
     mapM_ (fork . (\(Handler _ _ h) -> h event)) handlers
 -- Discard events which couldn't be decoded.
@@ -57,7 +51,7 @@ handleEvent _ _ = pure ()
 -- Default handlers
 
 -- | Default event handlers
-defaultHandlers :: [(Text, Value -> PusherClient ())]
+defaultHandlers :: MonadConc m => [(Text, Value -> PusherClient m ())]
 defaultHandlers =
   [ ("pusher:ping", pingHandler)
   , ("pusher:connection_established", establishConnection)
@@ -67,11 +61,11 @@ defaultHandlers =
   ]
 
 -- | Immediately send a pusher:pong
-pingHandler :: Value -> PusherClient ()
+pingHandler :: MonadConc m => Value -> PusherClient m ()
 pingHandler _ = triggerEvent "pusher:pong" Nothing (Object H.empty)
 
 -- | Record the activity timeout and socket ID.
-establishConnection :: Value -> PusherClient ()
+establishConnection :: MonadConc m => Value -> PusherClient m ()
 establishConnection event = do
   let socketidmay = event ^? ix "data" . ix "socket_id"        . _String
   let timeoutmay  = event ^? ix "data" . ix "activity_timeout" . _Integral
@@ -79,13 +73,14 @@ establishConnection event = do
   case (,) <$> socketidmay <*> timeoutmay of
     Just (socketid, timeout) -> do
       pusher <- ask
-      strictModifyTVarIO (idleTimer pusher) (const (Just timeout))
-      strictModifyTVarIO (socketId  pusher) (const (Just socketid))
+      lift $ do
+        strictModifyTVarConc (idleTimer pusher) (const (Just timeout))
+        strictModifyTVarConc (socketId  pusher) (const (Just socketid))
     Nothing -> pure ()
 
 -- | Save the list of users (if there is one) and send the internal
 -- "pusher:subscription_succeeded" event.
-addChannel :: Value -> PusherClient ()
+addChannel :: MonadConc m => Value -> PusherClient m ()
 addChannel event = do
   let channelmay = eventChannel event
   let usersmay   = event ^? ix "data" . ix "hash" . _Object
@@ -95,11 +90,11 @@ addChannel event = do
       pusher <- ask
       maybe (pure ()) (mapUsers channel . const) usersmay
       let json = event & ix "event" .~ "pusher:subscription_succeeded"
-      liftIO $ handleEvent pusher (Right json)
+      lift $ handleEvent pusher (Right json)
     Nothing -> pure ()
 
 -- | Record a presence channel user.
-addPresenceMember :: Value -> PusherClient ()
+addPresenceMember :: MonadConc m => Value -> PusherClient m ()
 addPresenceMember event = do
   let channelmay = eventChannel event
   let uidmay     = event ^? ix "data" . ix "user_id"   . _String
@@ -111,7 +106,7 @@ addPresenceMember event = do
     Nothing -> pure ()
 
 -- | Remove a presence channel user.
-rmPresenceMember :: Value -> PusherClient ()
+rmPresenceMember :: MonadConc m => Value -> PusherClient m ()
 rmPresenceMember event = do
   let channelmay = eventChannel event
   let uidmay     = event ^? ix "data" . ix "user_id" . _String
@@ -125,9 +120,10 @@ rmPresenceMember event = do
 -- Utilities
 
 -- | Apply a function to the users list of a presence channel
-mapUsers :: Channel
+mapUsers :: MonadConc m
+         => Channel
          -> (H.HashMap Text Value -> H.HashMap Text Value)
-         -> PusherClient ()
+         -> PusherClient m ()
 mapUsers channel f = do
   pusher <- ask
-  strictModifyTVarIO (presenceChannels pusher) (H.adjust (second f) channel)
+  lift $ strictModifyTVarConc (presenceChannels pusher) (H.adjust (second f) channel)

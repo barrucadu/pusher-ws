@@ -14,68 +14,76 @@
 module Network.Pusher.WebSockets.Internal where
 
 -- 'base' imports
-import Control.Concurrent (ThreadId)
-import Control.Exception (IOException, Exception, SomeException, catch, toException)
-import qualified Control.Exception as E
 import Data.String (IsString(..))
 import Data.Word (Word16)
 
 -- library imports
-import Control.Concurrent.STM (STM, TVar, atomically, newTVar, modifyTVar')
-import Control.Concurrent.STM.TQueue
-import qualified Control.Concurrent.STM as STM
+import Control.Concurrent.Classy (MonadConc(..))
+import Control.Concurrent.Classy.STM (MonadSTM, TVar, newTVar, modifyTVar')
+import Control.Concurrent.Classy.STM.TQueue
 import Control.DeepSeq (NFData(..), force)
+import Control.Exception (IOException)
+import Control.Monad.Catch (Exception, SomeException, catch, toException, throwM)
+import qualified Control.Monad.Catch as E
 import Control.Monad.IO.Class (MonadIO(..))
-import Control.Monad.Trans.Reader (ReaderT, runReaderT)
+import Control.Monad.Trans.Class (MonadTrans(..))
+import Control.Monad.Trans.Reader (ReaderT(..), runReaderT)
 import qualified Control.Monad.Trans.Reader as R
 import Data.Aeson (Value(..))
 import Data.Hashable (Hashable(..))
 import qualified Data.HashMap.Strict as H
 import qualified Data.Set as S
 import Data.Text (Text, unpack)
-import Data.Time.Clock (UTCTime, getCurrentTime)
+import Data.Time.Clock (UTCTime)
 import Network.Socket (HostName, PortNumber)
 import Network.WebSockets (ConnectionException, HandshakeException)
 
 -------------------------------------------------------------------------------
 
--- | A value of type @PusherClient a@ is a computation with access to
--- a connection to Pusher which, when executed, may perform
--- Pusher-specific actions such as subscribing to channels and
--- receiving events, as well as arbitrary I/O.
-newtype PusherClient a = PusherClient (ReaderT Pusher IO a)
-  deriving (Functor, Applicative, Monad, MonadIO)
+-- | A value of type @PusherClient m a@ is a computation with access to a
+-- connection to Pusher which, when executed, may perform Pusher-specific
+-- actions such as subscribing to channels and receiving events, as well as side
+-- effects in @m@. For actual executionm @m@ will be 'IO', for testing, an arbitrary instance of 'MonadConc'.
+newtype PusherClient m a = PusherClient (ReaderT (Pusher m) m a)
+  deriving (Functor, Applicative, Monad)
+
+instance MonadTrans PusherClient where
+  lift = PusherClient . ReaderT . const
+
+instance MonadIO m => MonadIO (PusherClient m) where
+  liftIO = PusherClient . liftIO
 
 -- | Run a 'PusherClient'.
-runPusherClient :: Pusher -> PusherClient a -> IO a
+runPusherClient :: MonadConc m => Pusher m -> PusherClient m a -> m a
 runPusherClient pusher (PusherClient action) = runReaderT action pusher
 
 -- | Pusher connection handle.
 --
--- If this is used after disconnecting, an exception will be thrown.
-data Pusher = Pusher
-  { commandQueue :: TQueue PusherCommand
+-- If this is used after disconnecting, an exception will be thrown. This is
+-- parameterised over the concurrency monad used.
+data Pusher m = Pusher
+  { commandQueue :: TQueue (STM m) PusherCommand
   -- ^ Queue to send commands to the client thread.
-  , connState :: TVar ConnectionState
+  , connState :: TVar (STM m) ConnectionState
   -- ^ The state of the connection.
   , options :: Options
   -- ^ Connection options
-  , idleTimer :: TVar (Maybe Int)
+  , idleTimer :: TVar (STM m) (Maybe Int)
   -- ^ Inactivity timeout before a ping should be sent. Set by Pusher
   -- on connect.
-  , lastReceived :: TVar UTCTime
+  , lastReceived :: TVar (STM m) UTCTime
   -- ^ Time of receipt of last message.
-  , socketId :: TVar (Maybe Text)
+  , socketId :: TVar (STM m) (Maybe Text)
   -- ^ Identifier of the socket. Set by Pusher on connect.
-  , threadStore :: TVar (S.Set ThreadId)
+  , threadStore :: TVar (STM m) (S.Set (ThreadId m))
   -- ^ Currently live threads.
-  , eventHandlers :: TVar (H.HashMap Binding Handler)
+  , eventHandlers :: TVar (STM m) (H.HashMap Binding (Handler m))
   -- ^ Event handlers.
-  , nextBinding :: TVar Binding
+  , nextBinding :: TVar (STM m) Binding
   -- ^ Next free binding.
-  , allChannels :: TVar (S.Set Channel)
+  , allChannels :: TVar (STM m) (S.Set Channel)
   -- ^ All subscribed channels.
-  , presenceChannels :: TVar (H.HashMap Channel (Value, H.HashMap Text Value))
+  , presenceChannels :: TVar (STM m) (H.HashMap Channel (Value, H.HashMap Text Value))
   -- ^ Connected presence channels
   }
 
@@ -145,42 +153,27 @@ data ConnectionState
   deriving (Eq, Ord, Read, Show)
 
 -- | State for a brand new connection.
-defaultPusher :: Options -> IO Pusher
-defaultPusher opts = do
-  now <- getCurrentTime
-  atomically $ do
-    defCommQueue    <- newTQueue
-    defConnState    <- newTVar Initialized
-    defIdleTimer    <- newTVar Nothing
-    defLastReceived <- newTVar now
-    defSocketId     <- newTVar Nothing
-    defThreadStore  <- newTVar S.empty
-    defEHandlers    <- newTVar H.empty
-    defBinding      <- newTVar (Binding 0)
-    defAChannels    <- newTVar S.empty
-    defPChannels    <- newTVar H.empty
-
-    pure Pusher
-      { commandQueue     = defCommQueue
-      , connState        = defConnState
-      , options          = opts
-      , idleTimer        = defIdleTimer
-      , lastReceived     = defLastReceived
-      , socketId         = defSocketId
-      , threadStore      = defThreadStore
-      , eventHandlers    = defEHandlers
-      , nextBinding      = defBinding
-      , allChannels      = defAChannels
-      , presenceChannels = defPChannels
-      }
+defaultPusher :: MonadConc m => UTCTime -> Options -> m (Pusher m)
+defaultPusher now opts = atomically $ Pusher
+  <$> newTQueue
+  <*> newTVar Initialized
+  <*> pure opts
+  <*> newTVar Nothing
+  <*> newTVar now
+  <*> newTVar Nothing
+  <*> newTVar S.empty
+  <*> newTVar H.empty
+  <*> newTVar (Binding 0)
+  <*> newTVar S.empty
+  <*> newTVar H.empty
 
 -- | Send a command to the queue. Throw a 'PusherClosed' exception if
 -- the connection has been disconnected.
-sendCommand :: Pusher -> PusherCommand -> IO ()
+sendCommand :: MonadConc m => Pusher m -> PusherCommand -> m ()
 sendCommand pusher cmd = do
-  cstate <- readTVarIO (connState pusher)
+  cstate <- readTVarConc (connState pusher)
   case cstate of
-    Disconnected ccode -> E.throwIO (PusherClosed ccode)
+    Disconnected ccode -> throwM (PusherClosed ccode)
     _ -> atomically (writeTQueue (commandQueue pusher) cmd)
 
 -------------------------------------------------------------------------------
@@ -254,10 +247,10 @@ defaultOptions key = Options
 -------------------------------------------------------------------------------
 
 -- | Event handlers: event name -> channel name -> handler.
-data Handler = Handler (Maybe Text) (Maybe Channel) (Value -> PusherClient ())
+data Handler m = Handler (Maybe Text) (Maybe Channel) (Value -> PusherClient m ())
 
 -- Cheats a bit.
-instance NFData Handler where
+instance NFData (Handler m) where
   rnf (Handler e c _) = rnf (e, c)
 
 -------------------------------------------------------------------------------
@@ -300,41 +293,41 @@ instance Hashable Binding where
 -------------------------------------------------------------------------------
 
 -- | Get the current state.
-ask :: PusherClient Pusher
+ask :: Monad m => PusherClient m (Pusher m)
 ask = PusherClient R.ask
 
 -- | Modify a @TVar@ strictly.
-strictModifyTVar :: NFData a => TVar a -> (a -> a) -> STM ()
+strictModifyTVar :: (MonadSTM stm, NFData a) => TVar stm a -> (a -> a) -> stm ()
 strictModifyTVar tvar = modifyTVar' tvar . force
 
--- | Modify a @TVar@ strictly in any @MonadIO@.
-strictModifyTVarIO :: (MonadIO m, NFData a) => TVar a -> (a -> a) -> m ()
-strictModifyTVarIO tvar = liftIO . atomically . strictModifyTVar tvar
+-- | Modify a @TVar@ strictly in a @MonadConc@.
+strictModifyTVarConc :: (MonadConc m, NFData a) => TVar (STM m) a -> (a -> a) -> m ()
+strictModifyTVarConc tvar = atomically . strictModifyTVar tvar
 
--- | Read a @TVar@ inside any @MonadIO@.
-readTVarIO :: MonadIO m => TVar a -> m a
-readTVarIO = liftIO . STM.readTVarIO
+-- | Modify a @TVar@ WHNF-strictly in a @MonadConc@.
+modifyTVarConc :: MonadConc m => TVar (STM m) a -> (a -> a) -> m ()
+modifyTVarConc tvar = atomically . modifyTVar' tvar
 
 -------------------------------------------------------------------------------
 
 -- | Ignore all exceptions by supplying a default value.
-ignoreAll :: a -> IO a -> IO a
+ignoreAll :: E.MonadCatch m => a -> m a -> m a
 ignoreAll fallback act = catchAll act (const (pure fallback))
 
 -- | Run an action, starting again on connection and handshake
 -- exception.
-reconnecting :: IO a -> IO () -> IO a
+reconnecting :: E.MonadCatch m => m a -> m () -> m a
 reconnecting act prere = loop where
   loop = catchNetException act (const (prere >> loop))
 
 -- | Catch all network exceptions.
-catchNetException :: forall a. IO a -> (SomeException -> IO a) -> IO a
+catchNetException :: forall m a. E.MonadCatch m => m a -> (SomeException -> m a) -> m a
 catchNetException act handler = E.catches act handlers where
-  handlers = [ E.Handler (handler . toException :: IOException -> IO a)
-             , E.Handler (handler . toException :: HandshakeException -> IO a)
-             , E.Handler (handler . toException :: ConnectionException -> IO a)
+  handlers = [ E.Handler (handler . toException :: IOException -> m a)
+             , E.Handler (handler . toException :: HandshakeException -> m a)
+             , E.Handler (handler . toException :: ConnectionException -> m a)
              ]
 
 -- | Catch all exceptions.
-catchAll :: IO a -> (SomeException -> IO a) -> IO a
+catchAll :: E.MonadCatch m => m a -> (SomeException -> m a) -> m a
 catchAll = catch

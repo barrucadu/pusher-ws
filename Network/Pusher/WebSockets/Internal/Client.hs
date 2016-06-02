@@ -20,10 +20,10 @@ import Data.Maybe (isJust)
 
 -- library imports
 import Control.Concurrent.STM (atomically, check, retry)
-import Control.Concurrent.STM.TQueue (tryReadTQueue)
-import Control.Concurrent.STM.TVar (TVar, newTVarIO, readTVar, writeTVar)
+import Control.Concurrent.STM.TVar (TVar, newTVarIO, readTVar, readTVarIO, writeTVar)
 import Control.Monad.IO.Class (liftIO)
-import Data.Aeson (Value(..), encode)
+import Data.Aeson (Value(..), encode, decode')
+import Data.ByteString.Lazy (ByteString)
 import qualified Data.HashMap.Strict as H
 import qualified Data.Set as S
 import Data.Text (Text, pack)
@@ -37,7 +37,7 @@ import Network.Pusher.WebSockets.Channel
 import Network.Pusher.WebSockets.Event
 import Network.Pusher.WebSockets.Internal
 import Network.Pusher.WebSockets.Internal.Event
-import Network.Pusher.WebSockets.Util
+import Network.Pusher.WebSockets.Internal.Util
 
 -------------------------------------------------------------------------------
 -- Pusher client
@@ -46,7 +46,7 @@ import Network.Pusher.WebSockets.Util
 -- reconnecting automatically, until finally told to terminate.
 --
 -- Does not automatically fork.
-pusherClient :: Pusher -> ((Connection -> IO ()) -> IO ()) -> IO ()
+pusherClient :: Pusher IO -> ((Connection -> IO ()) -> IO ()) -> IO ()
 pusherClient pusher withConnection = do
   -- Bind default handlers
   runPusherClient pusher $
@@ -70,7 +70,7 @@ pusherClient pusher withConnection = do
 
 -- | Fork off event handling and pinging threads, subscribe to
 -- channels, and loop processing commands until terminated.
-client :: Pusher -> Connection -> IO ()
+client :: Pusher IO -> Connection -> IO ()
 client pusher conn = flip catchAll handleExc $ do
   -- Fork off an event handling thread
   closevar <- newTVarIO Nothing
@@ -101,26 +101,14 @@ client pusher conn = flip catchAll handleExc $ do
     -- Mark the connection as closed by clearing the idle timer and
     -- socket ID and rethrow the exception.
     handleExc e = do
-      strictModifyTVarIO (idleTimer pusher) (const Nothing)
-      strictModifyTVarIO (socketId  pusher) (const Nothing)
+      strictModifyTVarConc (idleTimer pusher) (const Nothing)
+      strictModifyTVarConc (socketId  pusher) (const Nothing)
       throwIO e
-
--- | Wait for a command or close signal.
-awaitCommandOrClose :: Pusher
-                    -> TVar (Maybe Word16)
-                    -> IO (Either Word16 PusherCommand)
-awaitCommandOrClose pusher closevar = atomically $ do
-  cmd   <- tryReadTQueue (commandQueue pusher)
-  ccode <- readTVar closevar
-  case (cmd, ccode) of
-    (Just cmd', _)         -> pure (Right cmd')
-    (Nothing, Just ccode') -> pure (Left  ccode')
-    (Nothing, Nothing) -> retry
 
 -- | Handle a command or close signal. Throws an exception on
 -- disconnect: 'TerminatePusher' if the connection should not be
 -- re-established, and 'WS.ConnectionClosed' if it should be.
-handleCommandOrClose :: Pusher
+handleCommandOrClose :: Pusher IO
                      -> Connection
                      -> Either Word16 PusherCommand
                      -> IO ()
@@ -130,7 +118,7 @@ handleCommandOrClose _ _ (Left closeCode) =
   throwCloseException closeCode
 
 -- | Handle a command.
-handleCommand :: Pusher -> Connection -> PusherCommand -> IO ()
+handleCommand :: Pusher IO -> Connection -> PusherCommand -> IO ()
 handleCommand pusher conn pusherCommand = case pusherCommand of
   SendMessage      json -> sendJSON json
   SendLocalMessage json -> handleEvent pusher (Right json)
@@ -139,29 +127,16 @@ handleCommand pusher conn pusherCommand = case pusherCommand of
       [ ("event", String "pusher:subscribe")
       , ("data", channelData)
       ]
-    strictModifyTVarIO (allChannels pusher) (S.insert handle)
+    strictModifyTVarConc (allChannels pusher) (S.insert handle)
   Terminate -> sendClose conn ("goodbye" :: Text)
   where
     -- Send some JSON down the channel.
     sendJSON = WS.sendDataMessage conn . WS.Text . encode
 
--- | Throw the appropriate exception for a close code.
-throwCloseException :: Word16 -> IO a
-throwCloseException closeCode
-  -- Graceful termination
-  | closeCode < 4000 =
-    throwIO $ TerminatePusher Nothing
-  -- Server specified not to reconnect
-  | closeCode >= 4000 && closeCode < 4100 =
-    throwIO . TerminatePusher $ Just closeCode
-  -- Reconnect
-  | otherwise =
-    throwIO WS.ConnectionClosed
-
 -- | Send a ping every time the timeout elapses. If the connection
 -- closes the 'reconnectImmediately' close code is written to the
 -- 'TVar'.
-pingThread :: Pusher -> Connection -> TVar (Maybe Word16) -> IO ()
+pingThread :: Pusher IO -> Connection -> TVar (Maybe Word16) -> IO ()
 pingThread pusher conn closevar = do
   timeout <- liftIO . atomically $
     maybe retry pure =<< readTVar (idleTimer pusher)
@@ -182,31 +157,24 @@ pingThread pusher conn closevar = do
        then atomically (writeTVar closevar reconnectImmediately)
        else pinger timeout (i + 1)
 
+-------------------------------------------------------------------------------
+-- Handler dispatch
+
 -- | Receive and handle events until the connection is closed, at
 -- which point the close code is written to the provided 'TVar'.
-handleThread :: Pusher -> Connection -> TVar (Maybe Word16) -> IO ()
-handleThread pusher conn closevar = handler `catchAll` finaliser
-  where
-    handler = forever $ do
-      msg <- awaitEvent conn
-      atomically . writeTVar (lastReceived pusher) =<< getCurrentTime
-      handleEvent pusher msg
+handleThread :: Pusher IO -> Connection -> TVar (Maybe Word16) -> IO ()
+handleThread pusher conn closevar = handler `catchAll` finaliser where
+  handler = forever $ do
+    msg <- awaitEvent conn
+    atomically . writeTVar (lastReceived pusher) =<< getCurrentTime
+    handleEvent pusher msg
 
-    finaliser e = atomically . writeTVar closevar $ case fromException e of
-      Just (WS.CloseRequest ccode _) -> Just ccode
-      _ -> reconnectImmediately
+  finaliser e = atomically . writeTVar closevar $ case fromException e of
+    Just (WS.CloseRequest ccode _) -> Just ccode
+    _ -> reconnectImmediately
 
--- | @Just 4200@ = generic reconnect immediately
-reconnectImmediately :: Maybe Word16
-reconnectImmediately = Just 4200
-
--- | Set the connection state and send a state change event if
--- necessary.
-changeConnectionState :: Pusher -> ConnectionState -> IO ()
-changeConnectionState pusher connst = do
-  ev <- atomically $ do
-    oldState <- readTVar (connState pusher)
-    writeTVar (connState pusher) connst
-    pure $ (Object . H.singleton "event" . String) <$>
-      (if oldState == connst then Nothing else Just (connectionEvent connst))
-  maybe (pure ()) (handleEvent pusher . Right) ev
+-- | Block and wait for an event.
+awaitEvent :: Connection -> IO (Either ByteString Value)
+awaitEvent = fmap decode . WS.receiveDataMessage where
+  decode (WS.Text   bs) = maybe (Left bs) Right (decode' bs)
+  decode (WS.Binary bs) = Left bs

@@ -58,13 +58,12 @@ module Network.Pusher.WebSockets
   , module Network.Pusher.WebSockets.Util
   ) where
 
--- 'base' imports
-import Control.Concurrent (forkIO)
-
 -- library imports
-import Control.Concurrent.STM (atomically, retry)
-import Control.Concurrent.STM.TVar (readTVar, writeTVar)
-import Control.Monad.IO.Class (liftIO)
+import Control.Concurrent.Classy (MonadConc, atomically, readTVarConc)
+import qualified Control.Concurrent.Classy as C
+import Control.Concurrent.Classy.STM (retry)
+import Control.Concurrent.Classy.STM.TVar (readTVar, writeTVar)
+import Control.Monad.Trans.Class (lift)
 import Data.Time.Clock (getCurrentTime)
 import Network.WebSockets (runClientWith)
 import qualified Network.WebSockets as WS
@@ -87,7 +86,7 @@ import Network.Pusher.WebSockets.Util
 -- supplied action terminates, so either the action will need to call
 -- 'disconnect' or 'disconnectBlocking' as the last thing it does, or
 -- one of the event handlers will need to do so eventually.
-pusherWithOptions :: Options -> PusherClient a -> IO a
+pusherWithOptions :: Options -> PusherClient IO a -> IO a
 pusherWithOptions opts action
   | encrypted opts = run (runSecureClientWith host port path)
   | otherwise      = run (runClientWith host (fromIntegral port) path)
@@ -97,30 +96,31 @@ pusherWithOptions opts action
 
     -- Run the client
     run withConn = do
-      pusher <- defaultPusher opts
+      now <- getCurrentTime
+      pusher <- defaultPusher now opts
 
       let connOpts = WS.defaultConnectionOptions
             { WS.connectionOnPong = atomically . writeTVar (lastReceived pusher) =<< getCurrentTime }
       let withConnection = withConn connOpts []
 
-      _ <- forkIO (pusherClient pusher withConnection)
+      _ <- C.fork (pusherClient pusher withConnection)
       runPusherClient pusher action
 
 -- | Get the connection state.
-connectionState :: PusherClient ConnectionState
-connectionState = readTVarIO . connState =<< ask
+connectionState :: MonadConc m => PusherClient m ConnectionState
+connectionState = lift . readTVarConc . connState =<< ask
 
 -- | Gracefully close the connection. The connection will remain open
 -- and events will continue to be processed until the server accepts
 -- the request.
-disconnect :: PusherClient ()
+disconnect :: MonadConc m => PusherClient m ()
 disconnect = do
   pusher <- ask
-  liftIO (sendCommand pusher Terminate)
+  lift (sendCommand pusher Terminate)
 
 -- | Like 'disconnect', but block until the connection is actually
 -- closed.
-disconnectBlocking :: PusherClient ()
+disconnectBlocking :: MonadConc m => PusherClient m ()
 disconnectBlocking = do
   disconnect
   blockUntilDisconnected
@@ -131,10 +131,10 @@ disconnectBlocking = do
 -- This is useful if you run 'pusherWithOptions' in the main thread to
 -- prevent the program from terminating until one of your event
 -- handlers decides to disconnect.
-blockUntilDisconnected :: PusherClient ()
+blockUntilDisconnected :: MonadConc m => PusherClient m ()
 blockUntilDisconnected = do
   pusher <- ask
-  liftIO . atomically $ do
+  lift . atomically $ do
     cstate <- readTVar (connState pusher)
     case cstate of
       Disconnected _ -> pure ()

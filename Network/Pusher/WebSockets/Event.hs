@@ -28,9 +28,10 @@ module Network.Pusher.WebSockets.Event
 import Data.Maybe (fromMaybe)
 
 -- library imports
-import Control.Concurrent.STM (atomically, readTVar)
+import Control.Concurrent.Classy (MonadConc, atomically)
+import Control.Concurrent.Classy.STM (readTVar)
 import Control.Lens ((^?), (.~), (&), ix)
-import Control.Monad.IO.Class (liftIO)
+import Control.Monad.Trans.Class (lift)
 import Data.Aeson (Value(..), decodeStrict')
 import Data.Aeson.Lens (_String)
 import qualified Data.HashMap.Strict as H
@@ -66,27 +67,34 @@ eventChannel event = fmap Channel (event ^? ix "channel" . _String)
 --
 -- If multiple handlers match a received event, all will be
 -- executed. The order is unspecified, and may not be consistent.
-bind :: Text
+bind :: MonadConc m
+     => Text
      -- ^ Event name.
      -> Maybe Channel
      -- ^ Channel name: If @Nothing@, all events of that name are
      -- handled.
-     -> (Value -> PusherClient ())
+     -> (Value -> PusherClient m ())
      -- ^ Event handler.
-     -> PusherClient Binding
+     -> PusherClient m Binding
 bind = bindGeneric . Just
 
 -- | Variant of 'bind' which binds to all events in the given channel;
 -- or all events if no channel.
-bindAll :: Maybe Channel -> (Value -> PusherClient ()) -> PusherClient Binding
+bindAll :: MonadConc m
+        => Maybe Channel
+        -> (Value -> PusherClient m ())
+        -> PusherClient m Binding
 bindAll = bindGeneric Nothing
 
 -- | Internal: register a new event handler.
-bindGeneric :: Maybe Text -> Maybe Channel -> (Value -> PusherClient ())
-            -> PusherClient Binding
+bindGeneric :: MonadConc m
+            => Maybe Text
+            -> Maybe Channel
+            -> (Value -> PusherClient m ())
+            -> PusherClient m Binding
 bindGeneric event channel handler = do
   pusher <- ask
-  liftIO . atomically $ do
+  lift . atomically $ do
     b@(Binding i) <- readTVar (nextBinding pusher)
     let b' = Binding (i+1)
     strictModifyTVar (nextBinding pusher) (const b')
@@ -108,29 +116,30 @@ bindGeneric event channel handler = do
     attemptDecode _ = Nothing
 
 -- | Remove a binding
-unbind :: Binding -> PusherClient ()
+unbind :: MonadConc m => Binding -> PusherClient m ()
 unbind binding = do
   pusher <- ask
-  strictModifyTVarIO (eventHandlers pusher) (H.delete binding)
+  lift (strictModifyTVarConc (eventHandlers pusher) (H.delete binding))
 
 -------------------------------------------------------------------------------
 
 -- | Send an event with some JSON data. This does not trigger local
 -- event handlers.
-triggerEvent :: Text -> Maybe Channel -> Value -> PusherClient ()
+triggerEvent :: MonadConc m => Text -> Maybe Channel -> Value -> PusherClient m ()
 triggerEvent = sendMessage SendMessage
 
 -- | Trigger local event handlers, but do not send the event over the
 -- network.
-localEvent :: Text -> Maybe Channel -> Value -> PusherClient ()
+localEvent :: MonadConc m => Text -> Maybe Channel -> Value -> PusherClient m ()
 localEvent = sendMessage SendLocalMessage
 
 -- | Helper function for 'triggerEvent' and 'localEvent'
-sendMessage :: (Value -> PusherCommand)
-            -> Text -> Maybe Channel -> Value -> PusherClient ()
+sendMessage :: MonadConc m
+            => (Value -> PusherCommand)
+            -> Text -> Maybe Channel -> Value -> PusherClient m ()
 sendMessage cmd event channel data_ = do
   pusher <- ask
-  liftIO (sendCommand pusher (cmd json))
+  lift (sendCommand pusher (cmd json))
 
   where
     json = Object . H.fromList $ concat
