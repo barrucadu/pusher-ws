@@ -19,7 +19,7 @@ import Data.Word (Word16)
 
 -- library imports
 import Control.Concurrent.Classy (MonadConc(..))
-import Control.Concurrent.Classy.STM (MonadSTM, TVar, newTVar, modifyTVar')
+import Control.Concurrent.Classy.STM (MonadSTM, TVar, newTVar, modifyTVar', writeTVar)
 import Control.Concurrent.Classy.STM.TQueue
 import Control.DeepSeq (NFData(..), force)
 import Control.Exception (IOException)
@@ -34,7 +34,7 @@ import Data.Hashable (Hashable(..))
 import qualified Data.HashMap.Strict as H
 import qualified Data.Set as S
 import Data.Text (Text, unpack)
-import Data.Time.Clock (UTCTime)
+import Data.Time.Clock (UTCTime, getCurrentTime)
 import Network.Socket (HostName, PortNumber)
 import Network.WebSockets (ConnectionException, HandshakeException)
 
@@ -71,7 +71,7 @@ data Pusher m = Pusher
   , idleTimer :: TVar (STM m) (Maybe Int)
   -- ^ Inactivity timeout before a ping should be sent. Set by Pusher
   -- on connect.
-  , lastReceived :: TVar (STM m) UTCTime
+  , lastReceived :: TVar (STM m) (Maybe UTCTime)
   -- ^ Time of receipt of last message.
   , socketId :: TVar (STM m) (Maybe Text)
   -- ^ Identifier of the socket. Set by Pusher on connect.
@@ -153,7 +153,7 @@ data ConnectionState
   deriving (Eq, Ord, Read, Show)
 
 -- | State for a brand new connection.
-defaultPusher :: MonadConc m => UTCTime -> Options -> m (Pusher m)
+defaultPusher :: MonadConc m => Maybe UTCTime -> Options -> m (Pusher m)
 defaultPusher now opts = atomically $ Pusher
   <$> newTQueue
   <*> newTVar Initialized
@@ -175,6 +175,12 @@ sendCommand pusher cmd = do
   case cstate of
     Disconnected ccode -> throwM (PusherClosed ccode)
     _ -> atomically (writeTQueue (commandQueue pusher) cmd)
+
+-- | Update the time of the last received message.
+updateTime :: (MonadConc m, MonadIO m) => Pusher m -> m ()
+updateTime pusher = do
+  now <- liftIO getCurrentTime
+  atomically $ writeTVar (lastReceived pusher) (Just now)
 
 -------------------------------------------------------------------------------
 

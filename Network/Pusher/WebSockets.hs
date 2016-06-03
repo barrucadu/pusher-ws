@@ -63,9 +63,8 @@ module Network.Pusher.WebSockets
 import Control.Concurrent.Classy (MonadConc, atomically, readTVarConc)
 import qualified Control.Concurrent.Classy as C
 import Control.Concurrent.Classy.STM (retry)
-import Control.Concurrent.Classy.STM.TVar (readTVar, writeTVar)
+import Control.Concurrent.Classy.STM.TVar (readTVar)
 import Control.Monad.Trans.Class (lift)
-import Control.Monad.IO.Class (MonadIO, liftIO)
 import Data.Aeson (Value)
 import Data.Time.Clock (getCurrentTime)
 import Network.WebSockets (runClientWith)
@@ -101,10 +100,10 @@ pusherWithOptions opts action
     -- Run the client
     run withConn = do
       now <- getCurrentTime
-      pusher <- defaultPusher now opts
+      pusher <- defaultPusher (Just now) opts
 
       let connOpts = WS.defaultConnectionOptions
-            { WS.connectionOnPong = atomically . writeTVar (lastReceived pusher) =<< getCurrentTime }
+            { WS.connectionOnPong = updateTime pusher }
       let withConnection = withConn connOpts []
 
       _ <- C.fork (Client.pusherClient pusher withConnection)
@@ -126,10 +125,9 @@ pusherWithOptions opts action
 -- The given 'PusherClient' action can do almost anything it normally could when
 -- passed to 'PusherWithOptions', although subscribing to private and presence
 -- channels is not supported.
-mockPusher :: (MonadConc m, MonadIO m) => Options -> [Value] -> PusherClient m a -> m a
+mockPusher :: MonadConc m => Options -> [Value] -> PusherClient m a -> m a
 mockPusher opts events action = do
-  now <- liftIO getCurrentTime
-  pusher <- defaultPusher now opts
+  pusher <- defaultPusher Nothing opts
   _ <- C.fork (Mock.pusherClient pusher events)
   runPusherClient pusher action
 

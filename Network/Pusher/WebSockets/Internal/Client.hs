@@ -153,9 +153,11 @@ pingThread pusher conn closevar = do
       -- ago than the timeout signal disconnection. Otherwise loop.
       now     <- getCurrentTime
       lastMsg <- readTVarIO (lastReceived pusher)
-      if now `diffUTCTime` lastMsg > fromIntegral timeout
-       then atomically (writeTVar closevar reconnectImmediately)
-       else pinger timeout (i + 1)
+      case lastMsg of
+        Just time
+          | now `diffUTCTime` time > fromIntegral timeout ->
+            atomically (writeTVar closevar reconnectImmediately)
+        _ -> pinger timeout (i + 1)
 
 -------------------------------------------------------------------------------
 -- Handler dispatch
@@ -166,7 +168,7 @@ handleThread :: Pusher IO -> Connection -> TVar (Maybe Word16) -> IO ()
 handleThread pusher conn closevar = handler `catchAll` finaliser where
   handler = forever $ do
     msg <- awaitEvent conn
-    atomically . writeTVar (lastReceived pusher) =<< getCurrentTime
+    updateTime pusher
     handleEvent pusher msg
 
   finaliser e = atomically . writeTVar closevar $ case fromException e of
