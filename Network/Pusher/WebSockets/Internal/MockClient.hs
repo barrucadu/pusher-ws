@@ -73,8 +73,12 @@ handleCommands pusher closeVar = forever $ do
   case cmd of
     SendMessage      _ -> pure ()
     SendLocalMessage json -> handleEvent pusher (Right json)
-    Subscribe handle _ ->
+    Subscribe handle@(Channel channel) _ -> do
       strictModifyTVarConc (allChannels pusher) (S.insert handle)
+      handleEvent pusher . Right . Object $ H.fromList
+        [ ("event", String "pusher_internal:subscription_succeeded")
+        , ("channel", String channel)
+        ]
     Terminate -> atomically (writeTVar closeVar True)
   yield
 
