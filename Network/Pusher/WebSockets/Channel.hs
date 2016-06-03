@@ -15,6 +15,8 @@ module Network.Pusher.WebSockets.Channel
   , unsubscribe
   , members
   , whoami
+  , httpAuth
+  , mockAuth
   ) where
 
 -- 'base' imports
@@ -23,6 +25,7 @@ import Data.Monoid ((<>))
 -- library imports
 import Control.Concurrent.Classy (MonadConc, readTVarConc)
 import Control.Lens ((&), (%~), ix)
+import Control.Monad.Catch (MonadCatch)
 import Control.Monad.IO.Class (MonadIO(..))
 import Control.Monad.Trans.Class (lift)
 import Data.Aeson (Value(..), decode)
@@ -49,7 +52,8 @@ import Network.Pusher.WebSockets.Internal
 subscribe :: (MonadConc m, MonadIO m) => Text -> PusherClient m (Maybe Channel)
 subscribe channel = do
   pusher <- ask
-  data_ <- getSubscribeData
+  sockID <- lift $ readTVarConc (socketId pusher)
+  data_ <- lift $ getSubscribeData (authorise pusher sockID)
   case data_ of
     Just (Object o) -> do
       let channelData = Object (H.insert "channel" (String channel) o)
@@ -59,9 +63,9 @@ subscribe channel = do
     _ -> pure Nothing
 
   where
-    getSubscribeData
-      | "private-"  `isPrefixOf` channel = authorise handle
-      | "presence-" `isPrefixOf` channel = authorise handle
+    getSubscribeData auth
+      | "private-"  `isPrefixOf` channel = auth handle
+      | "presence-" `isPrefixOf` channel = auth handle
       | otherwise = pure (Just (Object H.empty))
 
     handle = Channel channel
@@ -99,35 +103,50 @@ whoami channel = do
 
 -------------------------------------------------------------------------------
 
--- | Send a channel authorisation request
-authorise :: (MonadConc m, MonadIO m) => Channel -> PusherClient m (Maybe Value)
-authorise (Channel channel) = do
-  pusher <- ask
-  let authURL = authorisationURL (options pusher)
-  let AppKey key = appKey (options pusher)
-  sockID <- lift (readTVarConc (socketId pusher))
+-- | Perform channel authorisation over HTTP.
+httpAuth :: (MonadCatch m, MonadIO m)
+         => Maybe String
+         -- ^ Authorisation URL. If @Nothing@ private and presence channels
+         -- cannot be used.
+         -> AppKey
+         -- ^ Application key.
+         -> Maybe Text
+         -- ^ Socket ID.
+         -> Channel
+         -- ^ The channel to auth against.
+         -> m (Maybe Value)
+httpAuth Nothing _ _ _ = pure Nothing
+httpAuth _ _ Nothing _ = pure Nothing
+httpAuth (Just authURL) (AppKey key) (Just sockID) (Channel channel) =
+  liftIO . ignoreAll Nothing $ do
+    -- Attempt to authorise against the server.
+    man <- W.newManager W.tlsManagerSettings
+    req <- W.parseUrl authURL
+    let req' = W.setQueryString
+                 [ ("channel_name", Just (encodeUtf8 channel))
+                 , ("socket_id",    Just (encodeUtf8 sockID))
+                 ] req
+    resp <- W.httpLbs req' man
 
-  case (authURL, sockID) of
-    (Just authURL', Just sockID') -> do
-      authData <- liftIO (authorise' authURL' sockID')
-      pure $ case authData of
-        -- If authed, prepend the app key to the "auth" field.
-        Just val -> Just (val & ix "auth" %~ prepend (key ++ ":"))
-        _ -> Nothing
-    _ -> pure Nothing
+    -- Return the authorisation response.
+    pure $ case decode (W.responseBody resp) of
+      -- If authed, prepend the app key to the "auth" field.
+      Just authData -> Just (authData & ix "auth" %~ prepend (key ++ ":"))
+      _ -> Nothing
 
   where
-    -- attempt to authorise against the server.
-    authorise' authURL sockID = ignoreAll Nothing $ do
-      man <- W.newManager W.tlsManagerSettings
-      req <- W.parseUrl authURL
-      let req' = W.setQueryString
-                   [ ("channel_name", Just (encodeUtf8 channel))
-                   , ("socket_id",    Just (encodeUtf8 sockID))
-                   ] req
-      resp <- W.httpLbs req' man
-      pure . decode $ W.responseBody resp
-
     -- prepend a value to a JSON string.
     prepend s (String str) = String (pack s <> str)
     prepend _ val = val
+
+-- | A mock authorisation handler. Returns an empty object for channels which
+-- evaluate to @True@.
+mockAuth :: Applicative f
+         => (Text -> Bool)
+         -- ^ Authorisaton predicate: takes the channel name and returns
+         -- @True@ if access is allowed.
+         -> Text
+         -- ^ The name of the channel.
+         -> f (Maybe Value)
+mockAuth authp channel = pure $
+  if authp channel then Just (Object H.empty) else Nothing

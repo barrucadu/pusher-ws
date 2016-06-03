@@ -66,6 +66,7 @@ import Control.Concurrent.Classy.STM (retry)
 import Control.Concurrent.Classy.STM.TVar (readTVar)
 import Control.Monad.Trans.Class (lift)
 import Data.Aeson (Value)
+import Data.Text (Text)
 import Data.Time.Clock (getCurrentTime)
 import Network.WebSockets (runClientWith)
 import qualified Network.WebSockets as WS
@@ -89,7 +90,11 @@ import Network.Pusher.WebSockets.Util
 -- supplied action terminates, so either the action will need to call
 -- 'disconnect' or 'disconnectBlocking' as the last thing it does, or
 -- one of the event handlers will need to do so eventually.
-pusherWithOptions :: Options -> PusherClient IO a -> IO a
+pusherWithOptions :: Options
+                  -- ^ Connection options.
+                  -> PusherClient IO a
+                  -- ^ Pusher client action.
+                  -> IO a
 pusherWithOptions opts action
   | encrypted opts = run (runSecureClientWith host port path)
   | otherwise      = run (runClientWith host (fromIntegral port) path)
@@ -100,7 +105,9 @@ pusherWithOptions opts action
     -- Run the client
     run withConn = do
       now <- getCurrentTime
-      pusher <- defaultPusher (Just now) opts
+      let authurl = authorisationURL opts
+      let appkey  = appKey opts
+      pusher <- defaultPusher (Just now) (httpAuth authurl appkey)
 
       let connOpts = WS.defaultConnectionOptions
             { WS.connectionOnPong = updateTime pusher }
@@ -122,12 +129,20 @@ pusherWithOptions opts action
 --     }
 -- @
 --
--- The given 'PusherClient' action can do almost anything it normally could when
--- passed to 'PusherWithOptions', although subscribing to private and presence
--- channels is not supported.
-mockPusher :: MonadConc m => Options -> [Value] -> PusherClient m a -> m a
-mockPusher opts events action = do
-  pusher <- defaultPusher Nothing opts
+-- The given 'PusherClient' action can do anything it normally could when passed
+-- to 'pusherWithOptions', including subscribe to private and presence channels
+-- (although they will appear to be empty).
+mockPusher :: MonadConc m
+           => (Text -> Bool)
+           -- ^ Channel authorisation function. Takes the channel name and
+           -- returns @True@ if the client is allowed in.
+           -> [Value]
+           -- ^ Events to trigger, in order.
+           -> PusherClient m a
+           -- ^ Pusher client action.
+           -> m a
+mockPusher authfunc events action = do
+  pusher <- defaultPusher Nothing (\_ (Channel c) -> mockAuth authfunc c)
   _ <- C.fork (Mock.pusherClient pusher events)
   runPusherClient pusher action
 

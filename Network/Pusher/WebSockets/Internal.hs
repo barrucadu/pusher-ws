@@ -1,5 +1,6 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE OverloadedStrings #-}
 
 -- |
 -- Module      : Network.Pusher.WebSockets.Internal
@@ -29,7 +30,7 @@ import Control.Monad.IO.Class (MonadIO(..))
 import Control.Monad.Trans.Class (MonadTrans(..))
 import Control.Monad.Trans.Reader (ReaderT(..), runReaderT)
 import qualified Control.Monad.Trans.Reader as R
-import Data.Aeson (Value(..))
+import Data.Aeson (Value)
 import Data.Hashable (Hashable(..))
 import qualified Data.HashMap.Strict as H
 import qualified Data.Set as S
@@ -66,8 +67,8 @@ data Pusher m = Pusher
   -- ^ Queue to send commands to the client thread.
   , connState :: TVar (STM m) ConnectionState
   -- ^ The state of the connection.
-  , options :: Options
-  -- ^ Connection options
+  , authorise :: Maybe Text -> Channel -> m (Maybe Value)
+  -- ^ Authorise access to a channel.
   , idleTimer :: TVar (STM m) (Maybe Int)
   -- ^ Inactivity timeout before a ping should be sent. Set by Pusher
   -- on connect.
@@ -153,11 +154,18 @@ data ConnectionState
   deriving (Eq, Ord, Read, Show)
 
 -- | State for a brand new connection.
-defaultPusher :: MonadConc m => Maybe UTCTime -> Options -> m (Pusher m)
-defaultPusher now opts = atomically $ Pusher
+defaultPusher :: MonadConc m
+              => Maybe UTCTime
+              -- ^ The current time, used in detecting a network timeout before
+              -- receipt of the first message.
+              -> (Maybe Text -> Channel -> m (Maybe Value))
+              -- ^ Channel authorisation function. Takes a socket ID and channel
+              -- name.
+              -> m (Pusher m)
+defaultPusher now auth = atomically $ Pusher
   <$> newTQueue
   <*> newTVar Initialized
-  <*> pure opts
+  <*> pure auth
   <*> newTVar Nothing
   <*> newTVar now
   <*> newTVar Nothing
