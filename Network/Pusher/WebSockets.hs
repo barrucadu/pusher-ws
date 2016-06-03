@@ -43,6 +43,7 @@ module Network.Pusher.WebSockets
   , Options(..)
   , Cluster(..)
   , pusherWithOptions
+  , mockPusher
   , defaultOptions
 
   -- ** Connection
@@ -64,6 +65,8 @@ import qualified Control.Concurrent.Classy as C
 import Control.Concurrent.Classy.STM (retry)
 import Control.Concurrent.Classy.STM.TVar (readTVar, writeTVar)
 import Control.Monad.Trans.Class (lift)
+import Control.Monad.IO.Class (MonadIO, liftIO)
+import Data.Aeson (Value)
 import Data.Time.Clock (getCurrentTime)
 import Network.WebSockets (runClientWith)
 import qualified Network.WebSockets as WS
@@ -73,7 +76,8 @@ import Wuss (runSecureClientWith)
 import Network.Pusher.WebSockets.Channel
 import Network.Pusher.WebSockets.Event
 import Network.Pusher.WebSockets.Internal
-import Network.Pusher.WebSockets.Internal.Client
+import qualified Network.Pusher.WebSockets.Internal.Client as Client
+import qualified Network.Pusher.WebSockets.Internal.MockClient as Mock
 import Network.Pusher.WebSockets.Util
 
 -- Haddock doesn't like the import/export shortcut when generating
@@ -103,8 +107,31 @@ pusherWithOptions opts action
             { WS.connectionOnPong = atomically . writeTVar (lastReceived pusher) =<< getCurrentTime }
       let withConnection = withConn connOpts []
 
-      _ <- C.fork (pusherClient pusher withConnection)
+      _ <- C.fork (Client.pusherClient pusher withConnection)
       runPusherClient pusher action
+
+-- | Mock a Pusher connection for testing purposes.
+--
+-- This takes a list of events to trigger, and triggers them all in turn,
+-- yielding after each to give event handlers a chance to run. An event is a
+-- JSON 'Value' which should be in the format:
+--
+-- @
+--     { "event":   "name of the event"          -- required
+--     , "channel": "name of the channel"        -- optional
+--     , "data":    "string or stringified json" -- optional
+--     }
+-- @
+--
+-- The given 'PusherClient' action can do almost anything it normally could when
+-- passed to 'PusherWithOptions', although subscribing to private and presence
+-- channels is not supported.
+mockPusher :: (MonadConc m, MonadIO m) => Options -> [Value] -> PusherClient m a -> m a
+mockPusher opts events action = do
+  now <- liftIO getCurrentTime
+  pusher <- defaultPusher now opts
+  _ <- C.fork (Mock.pusherClient pusher events)
+  runPusherClient pusher action
 
 -- | Get the connection state.
 connectionState :: MonadConc m => PusherClient m ConnectionState
