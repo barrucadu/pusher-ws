@@ -49,7 +49,7 @@ import Network.Pusher.WebSockets.Internal
 -- channel functions like 'members' and 'whoami'.
 --
 -- If authorisation fails, this returns @Nothing@.
-subscribe :: (MonadConc m, MonadIO m) => Text -> PusherClient m (Maybe Channel)
+subscribe :: MonadConc m => Text -> PusherClient m (Maybe Channel)
 subscribe channel = do
   pusher <- ask
   sockID <- lift $ readTVarConc (socketId pusher)
