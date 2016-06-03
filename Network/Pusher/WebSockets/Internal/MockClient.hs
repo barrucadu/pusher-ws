@@ -17,7 +17,8 @@ import Control.Monad (forever, unless, when)
 
 -- library imports
 import Control.Concurrent.Classy
-import Data.Aeson (Value)
+import Data.Aeson (Value(..))
+import qualified Data.HashMap.Strict as H
 import qualified Data.Set as S
 
 -- local imports
@@ -40,6 +41,14 @@ pusherClient pusher events = do
     mapM_ (\(e, h) -> bind e Nothing h) defaultHandlers
 
   -- \"Connect\" to Pusher
+  handleEvent pusher . Right . Object $ H.fromList
+    [ ("event", String "pusher:connection_established")
+    , ("data", Object $ H.fromList
+        [ ("socket_id", String "mock")
+        , ("activity_timeout", Number 120)
+        ]
+      )
+    ]
   changeConnectionState pusher Connected
 
   -- Fork a command-handling thread.
