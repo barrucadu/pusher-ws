@@ -1,3 +1,4 @@
+{-# LANGUAGE CPP               #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 -- |
@@ -38,7 +39,11 @@ import Network.Pusher.WebSockets.Util
 -- | Block and wait for an event.
 awaitEvent :: Connection -> IO (Either ByteString Value)
 awaitEvent = fmap decode . receiveDataMessage where
+#if MIN_VERSION_websockets(0,12,0)
+  decode (Text bs _) = maybe (Left bs) Right (decode' bs)
+#else
   decode (Text   bs) = maybe (Left bs) Right (decode' bs)
+#endif
   decode (Binary bs) = Left bs
 
 -- | Launch all event handlers which are bound to the current event.
