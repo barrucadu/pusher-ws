@@ -1,3 +1,4 @@
+{-# LANGUAGE CPP               #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 -- |
@@ -143,7 +144,11 @@ handleCommand pusher conn pusherCommand = case pusherCommand of
   Terminate -> sendClose conn ("goodbye" :: Text)
   where
     -- Send some JSON down the channel.
+#if MIN_VERSION_websockets(0,12,0)
+    sendJSON val = WS.sendDataMessage conn (WS.Text (encode val) Nothing)
+#else
     sendJSON = WS.sendDataMessage conn . WS.Text . encode
+#endif
 
 -- | Throw the appropriate exception for a close code.
 throwCloseException :: Word16 -> IO a
