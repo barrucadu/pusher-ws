@@ -2,7 +2,7 @@
 -- documentation, see http://haskell.org/cabal/users-guide/
 
 name:                pusher-ws
-version:             0.1.0.1
+version:             0.1.1.0
 synopsis:            Implementation of the Pusher WebSocket protocol
 
 description:
@@ -50,7 +50,7 @@ source-repository head
 source-repository this
   type:     git
   location: https://github.com/barrucadu/pusher-ws.git
-  tag:      pusher-ws-0.1.0.1
+  tag:      pusher-ws-0.1.1.0
 
 library
   exposed-modules:     Network.Pusher.WebSockets
