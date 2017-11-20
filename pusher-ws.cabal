@@ -57,10 +57,11 @@ library
                      , Network.Pusher.WebSockets.Channel
                      , Network.Pusher.WebSockets.Event
                      , Network.Pusher.WebSockets.Util
-  other-modules:       Network.Pusher.WebSockets.Internal
+                     , Network.Pusher.WebSockets.Internal
                      , Network.Pusher.WebSockets.Internal.Client
                      , Network.Pusher.WebSockets.Internal.Event
                      , Paths_pusher_ws
+  -- other-modules:       
   -- other-extensions:    
   build-depends:       base                 >=4.7  && <5
                      , aeson                >=0.8  && <1.3
